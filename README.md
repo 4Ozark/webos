@@ -40,7 +40,7 @@ For LG TVs running webOS 3 and later (ARM). It should work on all of them, but i
 
 ## Support
 - Issues: https://github.com/stremio-origin/webos/issues
-- A coffee: https://ko-fi.com/simussu
+- Support: https://ko-fi.com/simussu
 
 ## Credits
 - Interface sounds: [Interface Sounds](https://kenney.nl/assets/interface-sounds) by Kenney (CC0).
