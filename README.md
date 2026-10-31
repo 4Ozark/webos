@@ -1,7 +1,7 @@
-![Stremio Origin](docs/header.png)
+![Stremio Origin](docs/header-rounded.png)
 
 <p align="center">
-  <img src="docs/logo-pill.png" width="120" alt="Stremio Origin">
+  <img src="docs/logo-pill.png" width="200" alt="Stremio Origin">
 </p>
 
 <h1 align="center">Stremio Origin</h1>
@@ -48,4 +48,4 @@ For LG TVs running webOS 3 and later (ARM). It should work on all of them, but i
 - Torrents: [Nuvio Engine](https://github.com/NuvioMedia/nuvio-engine) (GPL-3.0); the app ships a modified version.
 
 ## Licence
-GPL-3.0 (see `LICENSE`). Third-party components and their licences: `third_party/licenses/README.txt`.
+GPL-3.0, see [LICENSE](LICENSE). Third-party components and their licences: [third_party/licenses/README.txt](third_party/licenses/README.txt).
