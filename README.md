@@ -1,22 +1,21 @@
 ![Stremio Origin](docs/header.png)
 
 <p align="center">
-  <img src="docs/logo.png" width="120" alt="Stremio Origin">
+  <img src="docs/logo-pill.png" width="120" alt="Stremio Origin">
 </p>
 
 <h1 align="center">Stremio Origin</h1>
 
-A native TV app for Stremio addons, written in C.
+<p align="center">A native TV app for Stremio addons, written in C.</p>
 
-*Stremio™ is a trademark of its owner. Stremio Origin is independent and unofficial, and is not
-affiliated with, endorsed by or sponsored by Stremio. The name only describes compatibility.*
+<p align="center"><em>Stremio™ is a trademark of its owner. Stremio Origin is independent and unofficial, and is not affiliated with, endorsed by or sponsored by Stremio. The name only describes compatibility.</em></p>
 
-You bring your own Stremio account and your own addons. The app ships empty, hosts and indexes
-nothing, and plays only the stream links your addons return.
+<p align="center">You bring your own Stremio account and your own addons. The app ships empty, hosts and indexes nothing, and plays only the stream links your addons return.</p>
 
 ## Features
 - Home, Discover, Library and Search from your addons, with artwork, logos and trailers
 - The best stream for your TV and connection, picked in one press
+- Buttons and highlights take their colour from each title's logo or artwork
 - People, reviews and a spotlight of what's new on every title
 - A player with episodes, sources, subtitles and audio, skip intro and recap, and a next-episode card
 - Styled subtitles as the film made them, and subtitle sync
