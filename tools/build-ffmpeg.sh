@@ -17,9 +17,9 @@ ZIG="${ZIG:-$ORIGIN_BUILD/zig-aarch64-macos-0.17.0/zig}"
 SDK="${SDK:-$ORIGIN_BUILD/sdk/arm-webos-linux-gnueabi_sdk-buildroot/arm-webos-linux-gnueabi/sysroot}"
 VERSION=7.1.1
 SHA256=733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
-TARBALL="$ORIGIN_BUILD/src/ffmpeg-$VERSION.tar.xz"
+TARBALL="$ORIGIN_BUILD/src/ffmpeg-$VERSION.tar.xz"; mkdir -p "$ORIGIN_BUILD/src"
 [ -f "$TARBALL" ] || curl -fsSL -o "$TARBALL" "https://ffmpeg.org/releases/ffmpeg-$VERSION.tar.xz"
-echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null
+if command -v shasum >/dev/null; then echo "$SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null; else echo "$SHA256  $TARBALL" | sha256sum -c - >/dev/null; fi   # (macOS / Linux)
 SRC="$W/ffmpeg-$VERSION"; [ -f "$SRC/configure" ] || tar -xJf "$TARBALL" -C "$W"
 B="$W/build-$TARGET"; P="$W/prefix-$TARGET"; mkdir -p "$B"
 # What the converter needs and nothing more: the DTS decoder (the core only is decoded, never the lossless XLL
@@ -50,7 +50,7 @@ CONF="$COMMON $COMPONENTS $ARCH"
 if [ ! -f "$P/lib/libavformat.a" ] || [ "$(cat "$B/.conf" 2>/dev/null)" != "$CONF $XC" ]; then
   echo "== FFmpeg $VERSION ($TARGET)"
   (cd "$B" && "$SRC/configure" --prefix="$P" $CONF --extra-cflags="$XC" --extra-ldflags="$XL" >/dev/null \
-    && { [ "$TARGET" != webos ] || sed -i '' 's/#define HAVE_SYSCTL 1/#define HAVE_SYSCTL 0/' config.h; } \
+    && { [ "$TARGET" != webos ] || { sed -i.orig 's/#define HAVE_SYSCTL 1/#define HAVE_SYSCTL 0/' config.h && rm -f config.h.orig; }; } \
     && make -j"${FFMPEG_JOBS:-4}" >/dev/null && make install >/dev/null)   # (the compiler's newer libc headers make configure see a sysctl glibc 2.17 never had)
   echo "$CONF $XC" > "$B/.conf"
 fi
