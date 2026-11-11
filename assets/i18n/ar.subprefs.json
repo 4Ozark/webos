@@ -1,0 +1,8 @@
+{
+ "Position": "الموضع",
+ "Low": "منخفض",
+ "Default": "افتراضي",
+ "Font": "الخط",
+ "Where the lines sit: +1 to +5 raise them, Low sets them a little under the usual place": "مكان أسطر الترجمة: ‎+1 إلى ‎+5 ترفعها، و«منخفض» ينزّلها قليلًا عن المكان المعتاد",
+ "The font of the subtitle lines. Styled (ASS) subtitles keep the fonts they ask for": "خط أسطر الترجمة. الترجمات المنمّقة (ASS) تحتفظ بالخطوط التي تطلبها"
+}

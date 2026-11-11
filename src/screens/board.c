@@ -101,7 +101,9 @@ static void on_catalog(ItemList *l, int cached, void *ud) {
 }
 static int first_visible_row(Board *b, int from, int dir);
 static void load_catalog_rows(Board *b, int disc, int keep) {
-  int oldRow = b->rowIdx, oldCols[MAXROWS]; for (int i = 0; i < b->n; i++) oldCols[i] = b->rows[i].col;
+  /* the focus and each row's column are kept by the row's title, not its place: a Continue Watching row that appears or goes
+     (the next episode arriving, a title finished) moves every row under it, and the focus must stay on the row it was on */
+  int oldRow = b->rowIdx, oldN = b->n, oldCols[MAXROWS]; static char oldTitles[MAXROWS][96]; for (int i = 0; i < b->n; i++) { oldCols[i] = b->rows[i].col; snprintf(oldTitles[i], sizeof oldTitles[i], "%s", b->rows[i].title); }
   Item *was = NULL; int nwas = 0; /* Continue Watching as it was, to find one taken out of it */
   if (keep && !disc && b->n && !strcmp(b->rows[0].title, "Continue Watching") && b->rows[0].items.n) { nwas = b->rows[0].items.n; was = malloc(sizeof(Item) * (size_t)nwas); if (was) memcpy(was, b->rows[0].items.items, sizeof(Item) * (size_t)nwas); else nwas = 0; }
   for (int i = 0; i < b->n; i++) row_clear(&b->rows[i]); b->n = 0; b->gen++;
@@ -113,8 +115,9 @@ static void load_catalog_rows(Board *b, int disc, int keep) {
       if (z) { z->hidden = 0; z->closing = 1; z->closeAt = app_now(); z->hk = 1; b->remIt = was[0]; b->remRow = (int)(z - b->rows); b->remIdx = 0; b->remAt = app_now(); } }
     free(was); }
   CatalogDef defs[12]; int nd = disc ? sb_disc_defs(defs, 12) : sb_home_defs(defs, 12);
-  for (int d = 0; d < nd; d++) { Row *r = row_add(b, defs[d].title, 0, 0); if (!r) break; int ri = (int)(r - b->rows); if (keep && ri < MAXROWS) r->col = oldCols[ri]; r->def = defs[d]; r->hasDef = 1; sb_catalog(&defs[d], on_catalog, tok(b, ri)); }
-  if (keep) { b->rowIdx = oldRow < b->n ? oldRow : (b->n ? b->n - 1 : 0); if (b->rowIdx < b->n && b->rows[b->rowIdx].closing) { int nx = first_visible_row(b, b->rowIdx + 1, 1); if (nx >= 0) b->rowIdx = nx; } /* (never on the row closing) */ for (int j = 0; j < b->n; j++) { Row *r = &b->rows[j]; if (r->items.n && r->col >= r->items.n) r->col = r->items.n - 1; } }
+  for (int d = 0; d < nd; d++) { Row *r = row_add(b, defs[d].title, 0, 0); if (!r) break; int ri = (int)(r - b->rows); if (keep) { for (int o = 0; o < oldN; o++) if (!strcmp(oldTitles[o], r->title)) { r->col = oldCols[o]; break; } } r->def = defs[d]; r->hasDef = 1; sb_catalog(&defs[d], on_catalog, tok(b, ri)); }
+  if (keep) { if (oldRow >= 0 && oldRow < oldN) for (int j = 0; j < b->n; j++) if (!strcmp(b->rows[j].title, oldTitles[oldRow])) { oldRow = j; break; } /* (the same row, wherever it is now) */
+    b->rowIdx = oldRow < b->n ? oldRow : (b->n ? b->n - 1 : 0); if (b->rowIdx < b->n && b->rows[b->rowIdx].closing) { int nx = first_visible_row(b, b->rowIdx + 1, 1); if (nx >= 0) b->rowIdx = nx; } /* (never on the row closing) */ for (int j = 0; j < b->n; j++) { Row *r = &b->rows[j]; if (r->items.n && r->col >= r->items.n) r->col = r->items.n - 1; } }
   else b->rowIdx = 0;
 }
 /* ---- the spotlight's own picks: this year's new films and the trending series, alternating (not the first row again) ---- */

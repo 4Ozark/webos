@@ -7,3 +7,6 @@ Third-party code in this app and its licences:
 - P-256 key exchange (third_party/crypto/uecc): micro-ecc by Kenneth MacKay, BSD-2-Clause (micro-ecc-BSD-2-Clause.txt).
 - FreeType, HarfBuzz, FriBidi, libass (ISC, 0.17.5), cJSON, stb, qrcodegen, libwebp, SDL2: their licences ship with their sources in third_party/.
 The app itself is GPL-3.0.
+
+Bundled subtitle fonts (assets/fonts), all SIL Open Font License 1.1, licence texts beside the fonts:
+Cairo (CAIRO-LICENSE.txt), Tajawal (TAJAWAL-LICENSE.txt), Roboto (ROBOTO-LICENSE.txt), Open Sans (OPENSANS-LICENSE.txt).

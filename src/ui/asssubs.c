@@ -39,9 +39,9 @@ typedef struct { int x, y, w, h; uint32_t color; unsigned char *bm; } Piece;   /
 typedef struct { Piece *p; int n, posOnly; int fw, fh; } Frame;
 typedef struct Inst {
   pthread_t th; pthread_mutex_t mu; pthread_cond_t cv; int dead;
-  MkvSession *mkv; int track; char url[4096], lang[16];
+  MkvSession *mkv; int track; char url[4096], lang[16], fontPath[512], fontFam[48]; /* fontPath: the viewer's subtitle font file ("": the app's own for the language) */
   /* from the main thread (under mu) */
-  double t, tAt; int playing; double fps; unsigned gen; int fw, fh, vw, vh; float vx, vy, vww, vhh, scale;
+  double t, tAt; int playing; double fps; unsigned gen; int fw, fh, vw, vh; float vx, vy, vww, vhh, scale, lift; /* lift: the viewer's Position, layout units, + raises */
   /* to it */
   Frame *pending; int slow, fail;
 } Inst;
@@ -116,18 +116,19 @@ static void *run(void *arg) {
   Inst *A = arg; plat_thread_background(5); /* (below the drawing and the file reader: at normal priority its heavy renders kept the reader of the lines it draws waiting) */
   char font[1200], fam[32]; int ar = !strncasecmp(A->lang, "ar", 2) || !strncasecmp(A->lang, "fa", 2) || !strncasecmp(A->lang, "per", 3) || !strncasecmp(A->lang, "ur", 2);
   snprintf(font, sizeof font, "%s/fonts/%s", plat_asset_dir(), ar ? "NotoSansArabic.ttf" : "InterVariable.ttf"); snprintf(fam, sizeof fam, "%s", ar ? "Noto Sans Arabic" : "Inter");
+  if (A->fontPath[0] && A->fontFam[0]) { snprintf(font, sizeof font, "%s", A->fontPath); snprintf(fam, sizeof fam, "%s", A->fontFam); } /* the viewer's choice is only the default and fallback font: fonts the file carries, and the ones its styles name, still win */
   ASS_Library *lib = ass_library_init(); if (lib) ass_set_message_cb(lib, ass_log, NULL);
   ASS_Renderer *rd = lib ? ass_renderer_init(lib) : NULL; ASS_Track *tr = lib ? ass_new_track(lib) : NULL;
   if (!rd || !tr) { fprintf(stderr, "[ass] libass would not start\n"); pthread_mutex_lock(&A->mu); A->fail = 1; pthread_mutex_unlock(&A->mu); goto out; }
   ass_set_cache_limits(rd, 800, 12); ass_set_hinting(rd, ASS_HINTING_NONE); ass_set_shaper(rd, ASS_SHAPING_COMPLEX);
-  int fontsDone = 0; long long attach = -1; unsigned cursor = 0, gen = ~0u; int haveHeader = 0, fw = 0, fh = 0, vw = 0, vh = 0; float scale = 0;
+  int fontsDone = 0; long long attach = -1; unsigned cursor = 0, gen = ~0u; int haveHeader = 0, fw = 0, fh = 0, vw = 0, vh = 0; float scale = 0, lift = 0;
   long long nextAt = -1, lastNow = -1; int anim = 0; double slowSince = 0, warmAt = wall(); unsigned warmGen = ~0u; int level = 0;
   struct { int n, frames; double sum, max, at; } stat = { 0, 0, 0, 0, wall() }; /* a line in the log every 30 s while it renders */
   for (;;) {
     pthread_mutex_lock(&A->mu);
     if (A->dead) { pthread_mutex_unlock(&A->mu); break; }
     double t = A->t + (A->playing ? wall() - A->tAt : 0), fps = A->fps > 1 ? A->fps : 24; int playing = A->playing; unsigned g = A->gen;
-    int nfw = A->fw, nfh = A->fh, nvw = A->vw, nvh = A->vh; float nsc = A->scale, vx = A->vx, vy = A->vy, vww = A->vww, vhh = A->vhh;
+    int nfw = A->fw, nfh = A->fh, nvw = A->vw, nvh = A->vh; float nsc = A->scale, nlift = A->lift, vx = A->vx, vy = A->vy, vww = A->vww, vhh = A->vhh;
     int fed = 0;
     if (!haveHeader && mkv_listed(A->mkv)) { mkv_style(A->mkv, A->track, 1); char *h = mkv_track_header(A->mkv, A->track); if (h) { ass_process_codec_private(tr, h, (int)strlen(h)); free(h); } haveHeader = 1; attach = mkv_attachments_at(A->mkv); }
     if (haveHeader) fed = mkv_events_since(A->mkv, A->track, &cursor, feed, tr); /* (under the reader's own lock, quick) */
@@ -135,11 +136,13 @@ static void *run(void *arg) {
     if (!haveHeader || nfw <= 0) { pthread_mutex_lock(&A->mu); if (!A->dead) { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += 200000000; if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; } pthread_cond_timedwait(&A->cv, &A->mu, &ts); } pthread_mutex_unlock(&A->mu); continue; }
     if (!fontsDone) { fontsDone = 1; ass_set_fonts(rd, font, fam, ASS_FONTPROVIDER_NONE, NULL, 0); /* first lines in the bundled font at once */
       if (attach >= 0 && load_fonts(A, lib, attach)) { ass_set_fonts(rd, font, fam, ASS_FONTPROVIDER_NONE, NULL, 1); gen = ~0u; } }
-    int resized = nfw != fw || nfh != fh || nvw != vw || nvh != vh || nsc != scale;
-    if (resized) { fw = nfw; fh = nfh; vw = nvw; vh = nvh; scale = nsc; ass_set_frame_size(rd, fw, fh); if (vw > 0 && vh > 0) ass_set_storage_size(rd, vw, vh);
+    int resized = nfw != fw || nfh != fh || nvw != vw || nvh != vh || nsc != scale || nlift != lift;
+    if (resized) { fw = nfw; fh = nfh; vw = nvw; vh = nvh; scale = nsc; lift = nlift; ass_set_frame_size(rd, fw, fh); if (vw > 0 && vh > 0) ass_set_storage_size(rd, vw, vh);
       /* the picture's own rectangle inside the frame: the script is laid out over it */
       float k = fw / 1920.0f; int l = (int)(vx * k), tp = (int)(vy * (fh / 1080.0f)), rr = fw - (int)((vx + vww) * k), bb = fh - (int)((vy + vhh) * (fh / 1080.0f));
-      ass_set_margins(rd, tp > 0 ? tp : 0, bb > 0 ? bb : 0, l > 0 ? l : 0, rr > 0 ? rr : 0); ass_set_use_margins(rd, 0); ass_set_font_scale(rd, scale > 0 ? scale : 1); }
+      ass_set_margins(rd, tp > 0 ? tp : 0, bb > 0 ? bb : 0, l > 0 ? l : 0, rr > 0 ? rr : 0); ass_set_use_margins(rd, 0); ass_set_font_scale(rd, scale > 0 ? scale : 1);
+      { /* the viewer's Position: only the lines the script leaves at the bottom move (libass leaves a \pos / \move line, a top or a middle one where they are) */
+        float pct = lift / (vhh > 1 ? vhh : 1080.0f) * 100.0f; if (pct < -5) pct = -5; if (pct > 45) pct = 45; ass_set_line_position(rd, pct); } }
     long long now = llround(t * 1000);
     int jumped = lastNow >= 0 && now < lastNow - 50; /* (seeks come as a new gen) */
     int force = g != gen || resized || jumped || lastNow < 0, need;
@@ -204,10 +207,10 @@ static void upload(int i) { /* a piece into the atlas: whole, or as tiles of up 
     AtlasSlot *s = &shown.s[i * 4 + shown.ns[i]]; if (atlas_put(b, w, h, -1, 1, s)) shown.ns[i]++; free(tmp);
   }
 }
-void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang) {
+void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang, const char *fontPath, const char *fontFamily) {
   asssubs_close(); failSaid = 0;
   Inst *A = calloc(1, sizeof *A); if (!A) return;
-  A->mkv = mkv; A->track = n; snprintf(A->url, sizeof A->url, "%s", url ? url : ""); snprintf(A->lang, sizeof A->lang, "%s", lang ? lang : ""); A->tAt = wall(); A->scale = 1;
+  A->mkv = mkv; A->track = n; snprintf(A->url, sizeof A->url, "%s", url ? url : ""); snprintf(A->lang, sizeof A->lang, "%s", lang ? lang : ""); snprintf(A->fontPath, sizeof A->fontPath, "%s", fontPath ? fontPath : ""); snprintf(A->fontFam, sizeof A->fontFam, "%s", fontFamily ? fontFamily : ""); A->tAt = wall(); A->scale = 1;
   pthread_mutex_init(&A->mu, NULL); pthread_cond_init(&A->cv, NULL);
   if (pthread_create(&A->th, NULL, run, A)) { pthread_mutex_destroy(&A->mu); pthread_cond_destroy(&A->cv); free(A); return; }
   pthread_detach(A->th); cur = A;
@@ -224,14 +227,14 @@ int asssubs_too_slow(void) {
   if (!cur || failSaid) return 0; pthread_mutex_lock(&cur->mu); int f = cur->fail; pthread_mutex_unlock(&cur->mu);
   if (f) failSaid = 1; return f;
 }
-void asssubs_tick(double t, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale) {
+void asssubs_tick(double t, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale, float lift) {
   Inst *A = cur; if (!A) return;
   float k = gfx_scale(); int fw = (int)(1920 * k + 0.5f), fh = (int)(1080 * k + 0.5f); if (fw > 1920) { fw = 1920; fh = 1080; } /* the drawable's pixels, at most full HD */
   pthread_mutex_lock(&A->mu);
   double pred = A->t + (A->playing ? wall() - A->tAt : 0);
-  int nudge = fabs(pred - t) > 0.3 || playing != A->playing || fw != A->fw || fh != A->fh || videoW != A->vw || videoH != A->vh || scale != A->scale || vx != A->vx || vy != A->vy || vw != A->vww || vh != A->vhh;
+  int nudge = fabs(pred - t) > 0.3 || playing != A->playing || fw != A->fw || fh != A->fh || videoW != A->vw || videoH != A->vh || scale != A->scale || lift != A->lift || vx != A->vx || vy != A->vy || vw != A->vww || vh != A->vhh;
   if (fabs(pred - t) > 0.3) A->gen++; /* a seek (or a delay changed): everything again at once */
-  A->t = t; A->tAt = wall(); A->playing = playing; A->fps = fps; A->fw = fw; A->fh = fh; A->vw = videoW; A->vh = videoH; A->scale = scale; A->vx = vx; A->vy = vy; A->vww = vw; A->vhh = vh;
+  A->t = t; A->tAt = wall(); A->playing = playing; A->fps = fps; A->fw = fw; A->fh = fh; A->vw = videoW; A->vh = videoH; A->scale = scale; A->vx = vx; A->vy = vy; A->vww = vw; A->vhh = vh; A->lift = lift;
   if (nudge) pthread_cond_signal(&A->cv);
   Frame *f = A->pending; A->pending = NULL;
   pthread_mutex_unlock(&A->mu);

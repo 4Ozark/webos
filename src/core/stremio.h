@@ -70,7 +70,10 @@ void sb_fmt_runtime(int mn, char *out, size_t cap);
 cJSON *lib_get(const char *id);         /* the account's item or NULL (belongs to the store) */
 int  lib_has(const char *id);           /* in the Library (not removed) */
 void lib_toggle(const Item *it);
-int  lib_cw_items(ItemList *out);       /* Continue Watching, newest first */
+int  lib_cw_items(ItemList *out);       /* Continue Watching, newest first (a series whose next episode waits is in it too) */
+/* an episode finished and the next one is known: the title's state points at it (offset 0) so it shows in Continue
+   Watching at once. 1: changed (and sent to the account once); 0: nothing to do or already so */
+int  lib_set_up_next(const char *id, const Item *it, const char *nextVid);
 typedef struct { char vid[80]; float pct, leftMin; } CwInfo;
 int  lib_cw_info(const Item *it, CwInfo *out);
 int  lib_item_watched(const Item *it);  /* the badge */

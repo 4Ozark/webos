@@ -4,6 +4,7 @@
 #include "core/json.h"
 #include "core/i18n.h"
 #include "core/addons.h"
+#include "core/cwlogic.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -369,12 +370,19 @@ static void item_from_lib(Item *out, const cJSON *l) {
   double d = js_num(s, "duration", 0), t = js_num(s, "timeOffset", 0); out->progress = d > 0 ? (float)(t / d) : 0; out->left = d > 0 ? (float)((d - t) / 60000.0) : 0;
 }
 static int cmp_mtime(const void *a, const void *b) { double x = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)a, "_mtime")), y = tms(cJSON_GetObjectItemCaseSensitive(*(cJSON **)b, "_mtime")); return x < y ? 1 : x > y ? -1 : 0; }
+/* a library item as the Continue Watching rules (core/cwlogic.c) read it */
+static void cw_facts(const cJSON *it, double nowMs, CwFacts *f) {
+  const cJSON *s = js_obj(it, "state"); const char *ty = js_str(it, "type", ""), *vid = js_str(s, "video_id", "");
+  memset(f, 0, sizeof *f); f->isOther = !strcmp(ty, "other"); f->isSeries = !strcmp(ty, "series");
+  f->removed = js_bool(it, "removed", 0); f->temp = js_bool(it, "temp", 0); f->hasName = js_str(it, "name", "")[0] != 0;
+  f->videoIdIsEpisode = *vid && strcmp(vid, js_str(it, "_id", "")) != 0;
+  f->timeOffsetMs = js_num(s, "timeOffset", 0); f->durationMs = js_num(s, "duration", 0);
+  f->lastWatchedMs = tms(cJSON_GetObjectItemCaseSensitive((cJSON *)s, "lastWatched")); f->nowMs = nowMs;
+}
 int lib_cw_items(ItemList *out) {
-  cJSON *lib = lib_arr(); cJSON *picks[256]; int n = 0; const cJSON *it;
-  cJSON_ArrayForEach(it, lib) { const cJSON *s = js_obj(it, "state"); const char *ty = js_str(it, "type", "");
-    if (!strcmp(ty, "other") || (js_bool(it, "removed", 0) && !js_bool(it, "temp", 0))) continue;
-    double to = js_num(s, "timeOffset", 0), d = js_num(s, "duration", 0); if (to <= 0) continue; if (d > 0 && to > d * 0.96) continue;
-    if (!js_str(it, "name", "")[0]) continue; if (n < 256) picks[n++] = (cJSON *)it; }
+  cJSON *lib = lib_arr(); cJSON *picks[256]; int n = 0; const cJSON *it; double nowMs = (double)time(NULL) * 1000;
+  cJSON_ArrayForEach(it, lib) { CwFacts f; cw_facts(it, nowMs, &f); if (!cw_visible(&f)) continue;
+    if (n < 256) picks[n++] = (cJSON *)it; }
   qsort(picks, n, sizeof picks[0], cmp_mtime); if (n > 12) n = 12;
   out->items = calloc(n ? n : 1, sizeof(Item)); out->n = n; for (int i = 0; i < n; i++) { item_from_lib(&out->items[i], picks[i]); out->items[i].cw = 1; }
   return n;
@@ -384,6 +392,21 @@ int lib_cw_info(const Item *it, CwInfo *out) {
   double to = js_num(s, "timeOffset", 0), d = js_num(s, "duration", 0); if (!(to > 0) || !(d > 0) || to > d * 0.96) return 0;
   const char *vid = js_str(s, "video_id", ""); if (!strcmp(it->type, "series") && !*vid) return 0;
   copy_str(out->vid, sizeof out->vid, *vid ? vid : it->id); out->pct = (float)(to / d); out->leftMin = (float)((d - to) / 60000.0); return 1;
+}
+/* An episode just finished and the next one is known: the title's state points at the next episode with nothing played
+   (offset 0, no duration), so Continue Watching offers it at once, as the official apps do, without the title page
+   being opened. One push to the account (at most once per change: asked again for the same episode, nothing is sent). */
+int lib_set_up_next(const char *id, const Item *it, const char *nextVid) {
+  if (!id || !*id || !nextVid || !*nextVid || !strcmp(nextVid, id)) return 0;
+  cJSON *l = lib_get(id); if (!l && it) l = lib_new_item(it); if (!l) return 0;
+  cJSON *s = cJSON_GetObjectItemCaseSensitive(l, "state"); if (!s) { s = cJSON_CreateObject(); cJSON_AddItemToObject(l, "state", s); }
+  if (!strcmp(js_str(s, "video_id", ""), nextVid) && js_num(s, "timeOffset", 0) <= 0 && js_num(s, "duration", 0) <= 0) return 0; /* already so */
+  char iso[40]; now_iso(iso, sizeof iso);
+  cJSON_DeleteItemFromObjectCaseSensitive(s, "video_id"); cJSON_AddStringToObject(s, "video_id", nextVid);
+  cJSON_DeleteItemFromObjectCaseSensitive(s, "timeOffset"); cJSON_AddNumberToObject(s, "timeOffset", 0);
+  cJSON_DeleteItemFromObjectCaseSensitive(s, "duration"); cJSON_AddNumberToObject(s, "duration", 0);
+  cJSON_DeleteItemFromObjectCaseSensitive(s, "lastWatched"); cJSON_AddStringToObject(s, "lastWatched", iso);
+  lib_save(l); return 1;
 }
 static char progId[64]; static Uint32 progPushT;
 void lib_set_progress(const char *id, const Item *it, const char *vid, double to, double dur, int force) {
