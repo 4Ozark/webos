@@ -1,16 +1,26 @@
-# EXPERIMENTAL / NOT YET RUN: builds the webOS IPK on GitHub's runners.
-# The build tools are given as inputs so a wrong default can be fixed without editing this file.
-# Without libsbengine.so / libsbdts.so (torrents, DTS) the IPK still installs; those two features are simply unavailable.
+# Builds the webOS IPK on GitHub's runners, from a phone if need be (Actions -> Build IPK -> Run workflow), and keeps
+# it as the run's artifact. The sound library (libsbdts: DTS conversion, Dolby Vision, Auto-sync listening) is built
+# too; the torrent engine (libsbengine) only when asked, it takes much longer. The build tools are inputs so a wrong
+# default can be fixed without editing this file.
 name: Build IPK
 on:
   workflow_dispatch:
     inputs:
+      appid:
+        description: "App id (a different one installs beside the original)"
+        default: "tv.stremioorigin.fork"
+      title:
+        description: "App title on the TV"
+        default: "Stremio Origin Fork"
+      engine:
+        description: "Build the torrent engine too (slow)"
+        type: boolean
+        default: false
       zig_url:
         description: "Zig 0.17.0 Linux x86_64 tarball URL (tools/build.sh is written for 0.17.0)"
-        required: true
+        default: "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
       sdk_url:
         description: "webOS buildroot SDK tarball URL"
-        required: true
         default: "https://github.com/openlgtv/buildroot-nc4/releases/latest/download/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz"
 jobs:
   ipk:
@@ -29,7 +39,18 @@ jobs:
           SYSROOT=$(find "$HOME/origin-build/sdk" -type d -name sysroot -path '*arm-webos-linux-gnueabi*' | head -1)
           echo "ZIG=$HOME/origin-build/zig/zig" >> "$GITHUB_ENV"
           echo "SDK=$SYSROOT" >> "$GITHUB_ENV"
+          rustup target add armv7-unknown-linux-gnueabi
+      - name: FFmpeg build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/origin-build/ffmpeg
+          key: ffmpeg-${{ hashFiles('tools/build-ffmpeg.sh') }}
+      - name: Sound library (libsbdts)
+        run: FFMPEG_JOBS=4 tools/build-ffmpeg.sh webos
+      - name: Torrent engine (libsbengine)
+        if: ${{ inputs.engine }}
+        run: tools/build-engine.sh webos
       - name: Build and package
-        run: tools/package.sh
+        run: APPID="${{ inputs.appid }}" TITLE="${{ inputs.title }}" tools/package.sh
       - uses: actions/upload-artifact@v4
         with: { name: ipk, path: dist/*.ipk }
