@@ -382,7 +382,7 @@ static void ass_sync(void) {
   asssubs_dim(subdim_scale(dim_idx()));
   asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f, sub_pos_off());
 }
-static void sync_auto_arm(void);
+static void sync_auto_arm(int chosen);
 /* ---- what the viewer chose for this title is kept (store key "pv", by the video's id: the same for any source, a torrent too) and
    comes back the next time it opens: the subtitle (off, one of the file's own by language, or the very file from an addon), the
    audio language and the subtitle delay. Only what the viewer changed is kept; the rest stays automatic. ---- */
@@ -425,7 +425,7 @@ static int pv_try_sub(void) {
   if (!strncmp(sv, "ext|", 4)) { SubEntry e; memset(&e, 0, sizeof e); char b[1200]; snprintf(b, sizeof b, "%s", sv + 4); char *f[4] = { 0 }; char *c = b; int nf = 0;
     while (nf < 3 && c) { f[nf++] = c; char *x = strchr(c, '|'); if (!x) { c = NULL; break; } *x = 0; c = x + 1; } f[3] = c; if (nf < 3 || !f[3] || !*f[3]) return 0;
     snprintf(e.addon, sizeof e.addon, "%s", f[1]); snprintf(e.lang, sizeof e.lang, "%s", f[2]); snprintf(e.url, sizeof e.url, "%s", f[3]);
-    P.autoSubDone = 1; set_ext_sub(atoi(f[0]) == 2 ? 2 : 1, &e); sync_auto_arm(); return 1; }
+    P.autoSubDone = 1; set_ext_sub(atoi(f[0]) == 2 ? 2 : 1, &e); sync_auto_arm(0); return 1; }
   return 0;
 }
 static void auto_sub(void) {
@@ -434,8 +434,8 @@ static void auto_sub(void) {
   int em = -1; for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (em < 0 || (P.emb[em].forced && !P.emb[j].forced))) em = j;
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
-  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
-  for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
+  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(0); return; }
+  for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(0); return; }
 }
 /* a trailer's captions (IMDb's or YouTube's): handed over with the trailer, read when the CC button turns them on */
 static TrailerSub trSubs[TRAILER_MAX_SUBS], trNext[TRAILER_MAX_SUBS]; static int trSubsN, trNextN;
@@ -502,22 +502,28 @@ static void load_emb_tracks(void) {
    playhead by the Matroska reader (any language: only when lines are spoken matters). They are waited for while they
    are being read (a torrent brings them in as its pieces arrive), up to 45 s; the matching then runs on a thread of
    its own (core/subsync). The answer applies to the lines' original times (running it again never adds up), the delay
-   goes back to 0, Reset undoes it. This TV hands its sound to the screen's own decoder, so there is no audio to match
-   against: a file with no text tracks (most HTTP and debrid files) is matched against another subtitle made for this
-   file instead, found and read by the job itself; nothing of the kind: nothing to sync against. ---- */
+   goes back to 0, Reset undoes it. This TV hands its sound to the screen's own decoder, so the app hears none of it
+   while it plays: a file with no text tracks (most HTTP and debrid files) is listened to by reading a few minutes of it
+   a second time (the sound decoded by libsbdts, where someone speaks matched against the lines), and when that gives
+   no clear answer, matched against another subtitle made for this file, found and read by the job itself; nothing of
+   the kind: nothing to sync against. Any subtitle put on, by the app or the viewer, is checked this way by itself, and
+   once lined up checked again ten minutes on (a recap or a break cut from this release moves it there). ---- */
 static struct { SubSync *job; int phase; /* 0 idle, 1 waiting for the reference, 2 matching */ int stage; double t0, nextAt, center; char st[160]; double *base; int nbase;
-  int quiet, autoWant; unsigned autoTok; double autoAt; /* quiet: the check of a subtitle the app chose by itself, unseen unless it fixes something */ } SY;
+  int quiet, autoWant; unsigned autoTok; double autoAt; /* quiet: the check of a subtitle put on, unseen unless it fixes something */
+  double recheckAt; /* once lined up: the quiet check again then (0: none) */
+  double af, ad; /* the answer applied to the lines' own times (with base) */ } SY;
 static void sync_stop(int keepTimes) {
   if (SY.job) { subsync_drop(SY.job); SY.job = NULL; } SY.phase = 0; SY.st[0] = 0; SY.quiet = 0;
-  if (!keepTimes) { free(SY.base); SY.base = NULL; SY.nbase = 0; }
+  if (!keepTimes) { free(SY.base); SY.base = NULL; SY.nbase = 0; SY.recheckAt = 0; }
 }
 static void sync_end(const char *why) { if (SY.job) { subsync_drop(SY.job); SY.job = NULL; } SY.phase = 0; if (!SY.quiet) snprintf(SY.st, sizeof SY.st, "%s", why); fprintf(stderr, "[subsync] %s%s\n", SY.quiet ? "(by itself) " : "", why); SY.quiet = 0; refresh_tray(4); }
 static void sync_undo(void) { /* Reset: the lines' own times again */
   if (SY.base && SY.nbase == P.ncues) { for (int i = 0; i < P.ncues; i++) { P.cues[i].s = SY.base[2 * i]; P.cues[i].e = SY.base[2 * i + 1]; } cueTimesGen++; }
   sync_stop(0);
 }
+static const char *sync_wait_txt(int stage);
 static void sync_run(void) {
-  if (SY.phase && SY.quiet) { SY.quiet = 0; snprintf(SY.st, sizeof SY.st, "%s", SY.phase == 2 ? (SY.stage ? T("Looking for a matching subtitle…") : T("Syncing…")) : T("Syncing…")); refresh_tray(4); return; } /* the check the app was making by itself: now shown */
+  if (SY.phase && SY.quiet) { SY.quiet = 0; snprintf(SY.st, sizeof SY.st, "%s", SY.phase == 2 ? sync_wait_txt(SY.stage) : T("Syncing…")); refresh_tray(4); return; } /* the check the app was making by itself: now shown */
   if (SY.phase) { sync_stop(1); refresh_tray(4); return; } /* pressed again while it runs: it stops */
   if (strncmp(P.curSub, "ext:", 4) || P.isTrailer) return;
   SY.phase = 1; SY.t0 = now_(); SY.nextAt = 0; SY.center = video_time(); snprintf(SY.st, sizeof SY.st, "%s", T("Syncing…")); refresh_tray(4);
@@ -529,7 +535,7 @@ static Cue *sync_xs(void) {
   for (int i = 0; i < P.ncues; i++) { xs[i] = P.cues[i]; if (orig) { xs[i].s = SY.base[2 * i]; xs[i].e = SY.base[2 * i + 1]; } }
   return xs;
 }
-static const char *sync_wait_txt(int stage) { return stage ? T("Looking for a matching subtitle…") : T("Syncing…"); }
+static const char *sync_wait_txt(int stage) { return stage == 2 ? T("Listening to the film…") : stage ? T("Looking for a matching subtitle…") : T("Syncing…"); }
 /* no text track to match against: every other subtitle listed for this video goes to the job, which keeps those made
    for this file (by hash, carried by the stream, by file name) and asks OpenSubtitles with the file's hash */
 static void sync_by_ref(const char *why) {
@@ -542,18 +548,24 @@ static void sync_by_ref(const char *why) {
   snprintf(q.filename, sizeof q.filename, "%s", P.st.filename); snprintf(q.hash, sizeof q.hash, "%s", P.st.hash); q.size = P.st.size > 0 ? P.st.size : P.size; q.hashable = hashable(P.url);
   if (!q.hash[0]) subs_hash_of(P.url, q.hash, &q.size); q.fps = video_fps();
   int canHash = (q.hash[0] || q.hashable) && q.type[0] && q.vid[0];
-  fprintf(stderr, "[sync] %s: another subtitle made for this file as the reference (%d listed, hash %s)\n", why, n, q.hash[0] ? q.hash : canHash ? "to work out" : "unknown");
-  if (!n && !canHash) { free(rs); sync_end(T("Nothing to sync against")); return; }
+  /* the sound: the track being heard (the TV lists them in the file's order), for a plain http file the converter reads */
+  int ord = -2; if (!P.isTrailer && !P.isHls && !strncmp(P.url, "http", 4) && hls_conv_available()) { ord = -1; VidTrack ts[16]; int na = aud_list(ts, 16), cur = P.curAud >= 0 ? P.curAud : video_audio_current();
+    for (int i = 0; i < na; i++) if (ts[i].idx == cur) ord = i; }
+  fprintf(stderr, "[sync] %s: the file's sound (%s), else another subtitle made for this file as the reference (%d listed, hash %s)\n", why, ord > -2 ? "audio track" : "not readable here", n, q.hash[0] ? q.hash : canHash ? "to work out" : "unknown");
+  if (!n && !canHash && ord == -2) { free(rs); sync_end(T("Nothing to sync against")); return; }
   Cue *xs = sync_xs(); if (!xs) { free(rs); sync_end(T("Couldn’t sync")); return; }
-  SY.job = subsync_start_ref(xs, P.ncues, SY.center, &q, P.curSub + 4, P.pick.list ? P.pick.lang : "", rs, n); free(xs); free(rs); /* (it keeps its own copies) */
+  SY.job = subsync_start_ref(xs, P.ncues, SY.center, &q, P.curSub + 4, P.pick.list ? P.pick.lang : "", rs, n, ord); free(xs); free(rs); /* (it keeps its own copies) */
   if (!SY.job) { sync_end(T("Couldn’t sync")); return; }
-  SY.phase = 2; SY.stage = 1; if (!SY.quiet) snprintf(SY.st, sizeof SY.st, "%s", sync_wait_txt(1)); refresh_tray(4);
+  SY.phase = 2; SY.stage = subsync_stage(SY.job); if (!SY.quiet) snprintf(SY.st, sizeof SY.st, "%s", sync_wait_txt(SY.stage)); refresh_tray(4);
 }
-static void sync_auto_arm(void) { if (!P.nEmb && !P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); } } /* (a file with subtitles of its own has them chosen instead) */
-/* the subtitle the app chose by itself at the start, for a file with no subtitles of its own: checked once its lines are
-   in and the lists have answered (or 15 s on), quietly; lined up only when clearly out (half a second or more, or the
-   wrong speed) and the viewer has set no delay, then said in a toast */
+/* chosen: the viewer put it on (else the app did, for a file with no subtitles of its own: one with them has them chosen
+   instead) */
+static void sync_auto_arm(int chosen) { if ((chosen || !P.nEmb) && !P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); } }
+/* a subtitle put on (by the app at the start, or by the viewer): checked once its lines are in and the lists have
+   answered (or 15 s on), quietly; lined up only when clearly out (half a second or more, or the wrong speed) and the
+   viewer has set no delay, then said in a toast. Once lined up, checked the same way ten minutes on */
 static void sync_auto_tick(void) {
+  if (!SY.autoWant && !SY.phase && SY.recheckAt > 0 && now_() >= SY.recheckAt) { SY.recheckAt = 0; SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_() - 3; fprintf(stderr, "[sync] checking again, ten minutes on\n"); }
   if (!SY.autoWant || SY.phase) return;
   if (SL.tok != SY.autoTok || strncmp(P.curSub, "ext:", 4) || P.isTrailer || P.subDelay != 0) { SY.autoWant = 0; return; } /* another choice since, or a delay of the viewer's */
   if (!P.ncues || SL.wait || now_() - SY.autoAt < 3 || ((P.extLoading || P.adxLoading) && now_() - SY.autoAt < 15)) return;
@@ -568,14 +580,15 @@ static void sync_tick(void) {
     if (r.st == SYNC_NOSUB) { sync_end(T("Couldn’t sync")); return; }
     if (r.st != SYNC_OK) { sync_end(T("Not sure: unchanged")); return; }
     double at = video_time(), sh = at * (r.f - 1) + r.d; /* the shift where it is watched (a speed fix moves it along the film) */
-    if (SY.quiet && (P.subDelay != 0 || (fabs(sh) < 0.5 && fabs(r.f - 1) < 0.0005))) { fprintf(stderr, "[sync] (by itself) %s: left as it is\n", P.subDelay != 0 ? "a delay was set meanwhile" : "already in sync"); sync_end(""); return; }
+    double af = SY.base && SY.nbase == P.ncues ? SY.af : 1, ad = SY.base && SY.nbase == P.ncues ? SY.ad : 0; /* what is applied now (a check again compares with it) */
+    if (SY.quiet && (P.subDelay != 0 || (fabs(at * (r.f - af) + r.d - ad) < 0.5 && fabs(r.f - af) < 0.0005))) { fprintf(stderr, "[sync] (by itself) %s: left as it is\n", P.subDelay != 0 ? "a delay was set meanwhile" : "already in sync"); sync_end(""); return; }
     if (!SY.base || SY.nbase != P.ncues) { free(SY.base); SY.base = malloc((size_t)(P.ncues ? P.ncues : 1) * 2 * sizeof *SY.base); SY.nbase = SY.base ? P.ncues : 0;
       for (int i = 0; i < SY.nbase; i++) { SY.base[2 * i] = P.cues[i].s; SY.base[2 * i + 1] = P.cues[i].e; } }
     if (!SY.base) { sync_end(T("Couldn’t sync")); return; }
-    for (int i = 0; i < P.ncues; i++) { P.cues[i].s = SY.base[2 * i] * r.f + r.d; P.cues[i].e = SY.base[2 * i + 1] * r.f + r.d; } cueTimesGen++;
+    for (int i = 0; i < P.ncues; i++) { P.cues[i].s = SY.base[2 * i] * r.f + r.d; P.cues[i].e = SY.base[2 * i + 1] * r.f + r.d; } cueTimesGen++; SY.af = r.f; SY.ad = r.d;
     P.subDelay = 0;
     char n[24]; snprintf(n, sizeof n, "%s%.1f", sh >= 0 ? "+" : "", sh); char st[160]; snprintf(st, sizeof st, "%s %s%s%s", T("Synced"), T1("{n} s", "n", n), fabs(r.f - 1) > 0.001 ? "  ·  " : "", fabs(r.f - 1) > 0.001 ? T("speed fixed") : "");
-    int q = SY.quiet; SY.quiet = 0; sync_end(st); toast(q ? T1("Subtitles synced {n} s", "n", n) : SY.st, 3000, NULL); return; }
+    int q = SY.quiet; SY.quiet = 0; sync_end(st); toast(q ? T1("Subtitles synced {n} s", "n", n) : SY.st, 3000, NULL); SY.recheckAt = now_() + 600; return; }
   if (now_() < SY.nextAt) return; SY.nextAt = now_() + 0.5;
   /* waiting for the file's own lines near the playhead */
   int st = mkv ? mkv_state(mkv) : MKV_FALLBACK, listed = mkv && st != MKV_FALLBACK && mkv_listed(mkv);
@@ -597,7 +610,7 @@ static void sync_tick(void) {
   /* its own tracks are the best reference by far: while they are being read keep waiting, up to 45 s */
   double limit = listed && st == MKV_HARVESTING ? 45 : 12;
   if (now_() - SY.t0 > limit) { fprintf(stderr, "[subsync] reference: %d lines near %.0f s after %.0f s\n", bestN, SY.center, now_() - SY.t0);
-    if (ntext) sync_end(T("Still reading the film’s subtitles: try again in a minute")); else sync_by_ref("the file's tracks were not read in time"); }
+    sync_by_ref(ntext ? "the file's subtitles are still being read" : "the file's tracks were not read in time"); } /* (its sound instead) */
 }
 
 /* ---- audio ---- */
@@ -1375,7 +1388,7 @@ static void choose(TItem *it) {
     else if (!strcmp(it->u, "off")) { subs_off(); P.pvU |= 1; } else if (!strncmp(it->u, "emb:", 4)) { set_emb_sub(it->i); P.pvU |= 1; } else if (it->tool) { if (strcmp(it->u, "sync")) { TM.vkC = P.tray.c; snprintf(TM.vkU, sizeof TM.vkU, "%s", it->u); mo_set(&TM.vkA, 0); mo_to(&TM.vkA, 1, .2f, C_OUT, 0); } if (!strcmp(it->u, "sync")) sync_run(); else if (!strcmp(it->u, "dlyopen")) { dly_open(); return; } else if (!strcmp(it->u, "dly")) { P.pvU |= 4; P.subDelay = it->d ? (double)((int)((P.subDelay + it->d) * 10 + (P.subDelay + it->d >= 0 ? 0.5 : -0.5))) / 10 : 0; if (!it->d) sync_undo(); render_tray(0); } else adjust(it->u); }
     else if (it->ls) { const SubEntry *l = it->ls == 1 ? P.ext : P.adx; int n = it->ls == 1 ? P.nExt : P.nAdx, k = it->i; /* the row's entry (found again by its file if the list moved) */
       if (k < 0 || k >= n || strcmp(l[k].url, it->u)) for (k = 0; k < n && strcmp(l[k].url, it->u); k++) ;
-      if (k < n) { set_ext_sub(it->ls, &l[k]); P.pvU |= 1; } }
+      if (k < n) { set_ext_sub(it->ls, &l[k]); P.pvU |= 1; sync_auto_arm(1); } }
   } else if (it->k == 4 && P.tray.kind == 3 && it->i >= 1000) { int ord = it->i - 1000; /* another track converted, from here */
     if (P.dts.conv == 2 && ord != P.dts.convOrd && ord >= 0) { P.dts.convOrd = ord; P.dts.conv = 1; P.dts.convAt = video_time(); P.dts.convT0 = now_();
       int fl = conv_flags(ord); P.dts.copyA = !!(fl & HC_COPYAUDIO);
@@ -1764,7 +1777,7 @@ void player_cast_track(const char *kind, const char *id, int ms) {
   if (!strcmp(kind, "sub")) {
     if (!strcmp(id, "off")) { subs_off(); P.pvU |= 1; }
     else if (!strncmp(id, "emb:", 4)) { set_emb_sub(atoi(id + 4)); P.pvU |= 1; }
-    else if (!strncmp(id, "ext1:", 5) || !strncmp(id, "ext2:", 5)) { int li = id[3] - '0', k = atoi(id + 5); const SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx; if (k >= 0 && k < n) { set_ext_sub(li, &l[k]); P.pvU |= 1; } }
+    else if (!strncmp(id, "ext1:", 5) || !strncmp(id, "ext2:", 5)) { int li = id[3] - '0', k = atoi(id + 5); const SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx; if (k >= 0 && k < n) { set_ext_sub(li, &l[k]); P.pvU |= 1; sync_auto_arm(1); } }
     refresh_tray(4); return; }
   if (!strcmp(kind, "audio")) {
     if (!strncmp(id, "conv:", 5)) { int ord = atoi(id + 5);

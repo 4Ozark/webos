@@ -17,4 +17,8 @@ int  hls_conv_available(void);                                  /* the converter
 void hls_conv_start(const char *url, int audioOrd, int flags);  /* audioOrd among the file's audio tracks (-1 the first DTS / TrueHD) */
 int  hls_conv_poll(char *url, size_t cap, char *why, size_t whyCap, HlsConvInfo *info); /* 0 opening, 1 ready (url to load), -1 failed (why) */
 void hls_conv_stop(void);
+/* Auto-sync: where someone speaks in [from, from + dur) s of the file at url (one flag per 10 ms in out, see
+   sbd_api.speech), reading at most maxBytes. audioOrd among the file's audio tracks (-1 the default one). Blocks: for a
+   worker thread; *stop breaks it off. Windows covered, or -1 (err) / -2 (stopped) */
+int  hls_speech(const char *url, int audioOrd, double from, double dur, long long maxBytes, unsigned char *out, int cap, volatile int *stop, char *err, size_t errn);
 #endif
