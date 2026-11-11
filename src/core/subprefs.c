@@ -23,12 +23,16 @@ static const SubFont FONTS[SUBFONT_N] = {
   { "noto",     "Noto Sans Arabic", "NotoSansArabic.ttf", "Noto Sans Arabic", 1, 1 },
   { "cairo",    "Cairo",            "Cairo.ttf",          "Cairo",            1, 1 },
   { "tajawal",  "Tajawal",          "Tajawal-Bold.ttf",   "Tajawal",          1, 1 },
-  { "roboto",   "Roboto",           "Roboto.ttf",         "Roboto",           1, 0 },
-  { "opensans", "Open Sans",        "OpenSans.ttf",       "Open Sans",        1, 0 },
-  { "arimo",    "Arimo (Arial)",    "Arimo.ttf",          "Arimo",            1, 0 },   /* Arial itself is not free to bundle; Arimo is drawn to the same measures */
+  { "roboto",   "Roboto (Latin only)",        "Roboto.ttf",         "Roboto",           1, 0 },
+  { "opensans", "Open Sans (Latin only)", "OpenSans.ttf",       "Open Sans",        1, 0 },
+  { "arimo",    "Arimo = Arial (Latin only)", "Arimo.ttf",          "Arimo",            1, 0 },   /* Arial itself is not free to bundle; Arimo is drawn to the same measures */
   { "almarai",  "Almarai",          "Almarai-Bold.ttf",   "Almarai",          1, 1 },
   { "amiri",    "Amiri",            "Amiri.ttf",          "Amiri",            1, 1 },
-  { "lato",     "Lato",             "Lato-Bold.ttf",      "Lato",             1, 0 },
+  { "lato",     "Lato (Latin only)",            "Lato-Bold.ttf",      "Lato",             1, 0 },
+  { "vazirmatn","Vazirmatn",        "Vazirmatn.ttf",      "Vazirmatn",        1, 1 },   /* the Arabic of these four reads close to Arial's */
+  { "plexar",   "IBM Plex Arabic",  "IBMPlexSansArabic-Medium.ttf", "IBM Plex Sans Arabic", 1, 1 },
+  { "naskh",    "Noto Naskh",       "NotoNaskhArabic.ttf", "Noto Naskh Arabic", 1, 1 },
+  { "kufi",     "Noto Kufi",        "NotoKufiArabic.ttf", "Noto Kufi Arabic", 1, 1 },
 };
 int subfont_index(const char *stored) {
   if (!stored || !*stored) return 0;

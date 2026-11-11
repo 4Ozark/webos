@@ -18,7 +18,7 @@ typedef struct {
   const char *family;       /* the family name inside the file (libass finds its default font by it) */
   int latin, arabic;        /* the scripts the file covers: Latin letters and digits / Arabic script */
 } SubFont;
-#define SUBFONT_N 10
+#define SUBFONT_N 14
 int            subfont_index(const char *stored);   /* the stored text to its index; anything unknown is "auto" (0) */
 const SubFont *subfont_at(int idx);
 /* The font file for a styled (ASS) track in language lang ("" when unknown), or NULL to keep the app's own: a track in an

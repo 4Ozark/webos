@@ -23,7 +23,7 @@ int main(void) {
   /* Font: "auto" is the app's own, as before; unknown values fall back to it */
   EXPECT_I("auto is index 0", subfont_index("auto"), 0); EXPECT_I("no value is auto", subfont_index(NULL), 0); EXPECT_I("junk is auto", subfont_index("comic"), 0);
   EXPECT_I("auto has no file", subfont_at(0)->file == NULL, 1);
-  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans", "arimo", "almarai", "amiri", "lato" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
+  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans", "arimo", "almarai", "amiri", "lato", "vazirmatn", "plexar", "naskh", "kufi" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
   EXPECT_I("bad font index is auto", subfont_at(77)->file == NULL, 1);
   for (int i = 1; i < SUBFONT_N; i++) { EXPECT_I("a font has a file", subfont_at(i)->file != NULL && subfont_at(i)->family != NULL, 1); EXPECT_I("a font covers some script", subfont_at(i)->latin || subfont_at(i)->arabic, 1); }
   /* which styled (ASS) tracks take the chosen font: only where it covers the track's script */
