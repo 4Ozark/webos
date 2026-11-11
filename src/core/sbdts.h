@@ -6,7 +6,7 @@
 #ifndef SB_DTS_H
 #define SB_DTS_H
 #include <stddef.h>
-#define SBD_API_VERSION 3     /* 3: speech (Auto-sync); a library of version 2 still converts, without it */
+#define SBD_API_VERSION 2
 #define SBD_NOINDEX 1
 #define SBD_DV81 2       /* a Dolby Vision profile 7 picture goes out as profile 8.1: its enhancement layer dropped, each RPU rewritten */
 #define SBD_COPYAUDIO 4  /* the chosen audio track goes out as it is (not decoded) */
@@ -35,12 +35,5 @@ typedef struct {
      keyframe at or before `from` to the end. Written through w as it is made. 0 done, -1 failed (err), -2 stopped */
   int         (*run)(SbdSrc *s, int seg, double from, sbd_write w, void *ud, volatile int *stop, sbd_stats *st, char *err, int errn);
   void        (*close)(SbdSrc *s);
-  /* (version 3) Auto-sync: where someone speaks in [from, from + dur) s of the file, on its own reading (no SbdSrc):
-     one audio track (audioOrd among the file's audio tracks, -1 the default one) decoded, its centre channel alone
-     when it has one (the dialogue), at 8 kHz mono through WebRTC's voice activity detector. out[i]: 1 when the 10 ms
-     from `from` + i / 100 s hold speech, else 0 (also where the sound was not reached). The reading stops after
-     maxBytes (0: no limit). The number of 10 ms windows covered, -1 failed (err), -2 stopped */
-  int         (*speech)(sbd_read rd, void *ud, long long size, int audioOrd, double from, double dur, long long maxBytes,
-                        unsigned char *out, int cap, volatile int *stop, char *err, int errn);
 } sbd_api;
 #endif
