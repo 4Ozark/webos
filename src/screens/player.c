@@ -383,6 +383,8 @@ static void ass_sync(void) {
   asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f, sub_pos_off());
 }
 static void sync_auto_arm(void);
+/* the delay as shown: tenths (the step), hundredths only for a value kept from before (0.25 s steps) */
+static const char *dly_fmt(double v, int bare) { double t = fabs(v) * 10; int tenths = fabs(t - floor(t + 0.5)) < 1e-6; return bare ? (tenths ? "%s%.1f" : "%s%.2f") : (tenths ? "%s%.1f s" : "%s%.2f s"); }
 /* ---- what the viewer chose for this title is kept (store key "pv", by the video's id: the same for any source, a torrent too) and
    comes back the next time it opens: the subtitle (off, one of the file's own by language, or the very file from an addon), the
    audio language and the subtitle delay. Only what the viewer changed is kept; the rest stays automatic. ---- */
@@ -1237,7 +1239,7 @@ static void tray_data(void) {
     TCol *c1 = &P.tray.cols[0], *c2 = &P.tray.cols[1], *c3 = &P.tray.cols[2], *c4 = &P.tray.cols[3]; P.tray.ncols = 4;
     int addonsTab = 0; if (!P.isTrailer && (P.nSubAddons > 0 || P.nAdx > 0)) { P.tray.ntabs = 2; snprintf(P.tray.tabs[0], 48, "%s", T("Subtitles")); snprintf(P.tray.tabs[1], 48, "%s", T("Addons")); if (P.tray.tab > 1) P.tray.tab = 0; addonsTab = P.tray.tab == 1; } else P.tray.tab = 0;
     snprintf(c3->title, 64, "%s", T("Style")); snprintf(c4->title, 64, "%s", T("Delay"));
-    { char dl[24]; snprintf(dl, sizeof dl, "%s%.2f", P.subDelay > 0 ? "+" : "", P.subDelay); snprintf(c4->vl, 32, "%s", T1("{n} s", "n", dl)); }
+    { char dl[24]; snprintf(dl, sizeof dl, dly_fmt(P.subDelay, 1), P.subDelay > 0 ? "+" : "", P.subDelay); snprintf(c4->vl, 32, "%s", T1("{n} s", "n", dl)); }
     TItem *x;
     if (!addonsTab) {
       snprintf(c1->title, 64, "%s", P.isTrailer ? T("Subtitles") : T("In the file")); snprintf(c2->title, 64, "%s", P.isTrailer ? T("Languages") : "OpenSubtitles");
@@ -1439,7 +1441,7 @@ static void dly_draw(void);
 /* ---- the delay card: the subtitles' timing set while watching. A small card at the top with - and + (a quarter of a
    second each), the delay between them, play / pause and Done; the picture and the lines stay in view, so a change is
    seen at once. Back or Done closes it (mode 4) ---- */
-#define DLY_STEP 0.25
+#define DLY_STEP 0.1   /* each press: a tenth of a second */
 static void dly_open(void) { close_tray(); P.osd = 0; P.mode = 4; P.dlyF = 0; mo_set(&P.dlyR, 0); mo_to(&P.dlyA, 1, .28f, C_OUT, 0); }
 static void dly_close(void) { P.mode = 0; mo_to(&P.dlyA, 0, .2f, C_EASE, 0); }
 static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay + d; v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
@@ -2539,7 +2541,7 @@ int player_nerd_lines(char (*out)[120], int max) {
 
 static void dly_draw(void) {
   float a = P.dlyA.v; if (a <= 0.004f) { DG.h = 0; return; }
-  /* [ - ]  +0.25 s  [ + ]  |  [ play ]  [ Done ]: one row, the value large between its two keys */
+  /* [ - ]  +0.3 s  [ + ]  |  [ play ]  [ Done ]: one row, the value large between its two keys */
   const float B = 76, G = 18, VW = 230, h = 120; static TMemo dW; const char *dn = T("Done"); float dw = tm_width(&dW, dn, 26, 700, 0) + 64;
   float w = 28 + B + G + VW + G + B + 28 + 2 + 28 + B + G + dw + 28, x = SB_W / 2 - w / 2, y = 44 - 24 * (1 - a);
   gfx_opacity_push(a); gfx_offset_push(nudge_x(&P.nudge), 0);
@@ -2558,7 +2560,7 @@ static void dly_draw(void) {
     else if (i == 2) icon_draw(paused() ? "p_play" : "p_pause", bx[i] + B / 2 - 17, cy - 17, 34, c);
     else text_draw(dn, bx[i] + bw[i] / 2, cy - text_line_height(26) / 2.0f, 26, 700, c, 0, 0, ALIGN_CENTER); }
   /* the delay: large, a small lift when it changes; under it what it means */
-  { char v[32]; if (P.subDelay == 0) snprintf(v, sizeof v, "0.00 s"); else snprintf(v, sizeof v, "%s%.2f s", P.subDelay > 0 ? "+" : "\xe2\x88\x92", fabs(P.subDelay));
+  { char v[32]; if (P.subDelay == 0) snprintf(v, sizeof v, "0.0 s"); else snprintf(v, sizeof v, dly_fmt(P.subDelay, 0), P.subDelay > 0 ? "+" : "\xe2\x88\x92", fabs(P.subDelay));
     float e = (float)((now_() - P.dlyAt) / 0.22); e = e < 0 ? 0 : e > 1 ? 1 : e; float lift = 6 * (1 - ease_apply(EASE_OUT, e));
     text_draw(v, vx + VW / 2, cy - 30 - lift, 40, 800, WHITE_A(255), -0.4f, 0, ALIGN_CENTER);
     const char *m = P.subDelay > 0 ? T("Subtitles later") : P.subDelay < 0 ? T("Subtitles earlier") : T("Subtitle delay");
