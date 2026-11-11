@@ -9,6 +9,9 @@
 static const double RATIOS[7] = { 1, 25 / 23.976, 23.976 / 25, 24 / 23.976, 23.976 / 24, 25.0 / 24, 24.0 / 25 };
 #define STEP 0.01
 #define PEAKS 6
+/* the share of each line that counts: subtitlers hold a line on after it is spoken, so the whole of it pulled the answer
+   0.2 s early (the lines showed before the words); its first 70 % lands on them (test films: -0.06 to +0.13 s) */
+#define KEEP 0.7
 
 /* ---- an in-place radix-2 FFT (inv: the inverse, unscaled) ---- */
 static void fft(double *re, double *im, int n, int inv) {
@@ -45,6 +48,7 @@ int speech_match(const unsigned char *bits, int n, double t0, const SpLine *x, i
   for (int ri = 0; ri < 7; ri++) { double f = RATIOS[ri];
     memset(on, 0, (size_t)L);
     for (int i = 0; i < nx; i++) { double s = x[i].s * f, e = x[i].e * f; if (e <= s) continue;
+      e = fmax(s + (e - s) * KEEP, fmin(e, s + 0.3)); /* (a line stays up after the words, to be read: its last part left out) */
       long k0 = (long)ceil((s - w0) / STEP), k1 = (long)ceil((e - w0) / STEP); if (k1 <= 0 || k0 >= L) continue;
       if (k0 < 0) k0 = 0;
       if (k1 > L) k1 = L;
@@ -76,9 +80,10 @@ int speech_match(const unsigned char *bits, int n, double t0, const SpLine *x, i
   int lines = 0; for (int i = 0; i < nx; i++) { double s = x[i].s * best.f + best.d, e = x[i].e * best.f + best.d; if (e > t0 && s < t1) lines++; }
   a->d = round(best.d * 100) / 100; a->f = best.f; a->score = best.sc; a->margin = best.sc - second; a->z = (best.sc - mean) / sd; a->lines = lines;
   /* clear: well above every answer elsewhere, high, far above the curve, and lines enough. Measured on four test films
-     (real speech over music and noise, 5.1 and stereo, AC3 / E-AC3 / AAC, windows all through them): another film's
-     subtitle peaked at margin 0.07, r 0.43, z 4.0 at most; the right one, at margin 0.22, r 0.59, z 4.5 at least */
-  a->ok = a->margin >= 0.15 && a->score >= 0.5 && a->z >= 4.4 && lines >= 12;
+     (real speech over music and noise, 5.1 and stereo, AC3 / E-AC3 / AAC, 24 windows all through them, 96 pairings with
+     another film's subtitle): the wrong one peaked at margin 0.09, r 0.39, z 4.6 at most; the right one, at margin
+     0.29, r 0.65, z 5.6 at least */
+  a->ok = a->margin >= 0.15 && a->score >= 0.5 && a->z >= 5 && lines >= 12;
   a->promising = !a->ok && a->margin >= 0.1 && a->score >= 0.45;
   fprintf(stderr, "[sync] speech: %.0f s heard over %.0f s, %d lines; best %+.2f s x%.4f: score %.2f, margin %.2f, peak z %.1f%s\n",
           a->speech, n * STEP, lines, a->d, a->f, a->score, a->margin, a->z, a->ok ? "" : " (unsure)");
