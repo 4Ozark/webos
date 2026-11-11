@@ -9,6 +9,7 @@
 #include "core/subs.h"
 #include "core/subprefs.h"
 #include "core/cwlogic.h"
+#include "core/pvstore.h"
 #include "platform/plat.h"
 #include "core/video.h"
 #include "ui/shared.h"
@@ -397,20 +398,19 @@ static void pv_load(void) {
 }
 static void pv_flush(void) {
   if (!P.pvU || P.isTrailer || !P.vid[0] || getenv("SB_PLAY_NOSAVE")) { P.pvU = 0; return; }
-  cJSON *o = pv_obj(1); if (!o) { P.pvU = 0; return; } cJSON *e = cJSON_GetObjectItemCaseSensitive(o, P.vid); if (!e) e = cJSON_AddObjectToObject(o, P.vid); if (!e) { P.pvU = 0; return; }
+  cJSON *o = pv_obj(1); cJSON *e = o ? pv_rec(o, P.vid, 1) : NULL; if (!e) { P.pvU = 0; return; }
   if (P.pvU & 1) { char v[1200]; v[0] = 0;
     if (!strcmp(P.curSub, "off")) snprintf(v, sizeof v, "off");
     else if (!strncmp(P.curSub, "emb:", 4)) { int n = atoi(P.curSub + 4), k = -1, ord = 0; for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == n) k = i;
       if (k >= 0) { for (int i = 0; i < k; i++) if (!strcmp(P.emb[i].lang, P.emb[k].lang)) ord++; snprintf(v, sizeof v, "emb|%s|%d", P.emb[k].lang, ord); } }
     else if (!strncmp(P.curSub, "ext:", 4)) snprintf(v, sizeof v, "ext|%d|%s|%s|%s", P.pick.list, P.pick.addon, P.pick.lang, P.curSub + 4);
-    if (v[0]) cJSON_ReplaceItemInObjectCaseSensitive(e, "s", cJSON_CreateString(v)); }
+    if (v[0]) pv_set_str(e, "s", v); }
   if ((P.pvU & 2) && P.curAud >= 0) { VidTrack ts[16]; int n = aud_list(ts, 16), k = -1; for (int i = 0; i < n; i++) if (ts[i].idx == P.curAud) k = i;
     if (k >= 0) { char v[28]; if (ts[k].lang[0]) { int ord = 0; for (int i = 0; i < k; i++) if (!strcmp(ts[i].lang, ts[k].lang)) ord++; snprintf(v, sizeof v, "%.20s|%d", ts[k].lang, ord); } else snprintf(v, sizeof v, "#%d", k);
-      cJSON_ReplaceItemInObjectCaseSensitive(e, "a", cJSON_CreateString(v)); } }
-  if (P.pvU & 4) cJSON_ReplaceItemInObjectCaseSensitive(e, "d", cJSON_CreateNumber((int)lround(P.subDelay * 1000)));
-  cJSON_ReplaceItemInObjectCaseSensitive(e, "t", cJSON_CreateNumber((double)time(NULL)));
-  while (cJSON_GetArraySize(o) > PV_MAX) { cJSON *old = NULL; double ot = 1e18; for (cJSON *c = o->child; c; c = c->next) { double t = js_num(c, "t", 0); if (c != e && t < ot) { ot = t; old = c; } } if (!old) break; cJSON_DeleteItemFromObjectCaseSensitive(o, old->string); }
-  store_set_node("pv", o); P.pvU = 0;
+      pv_set_str(e, "a", v); } }
+  if (P.pvU & 4) pv_set_num(e, "d", (double)(int)lround(P.subDelay * 1000));
+  pv_set_num(e, "t", (double)time(NULL)); pv_prune(o, PV_MAX, e);
+  store_set_node("pv", o); P.pvU = 0; fprintf(stderr, "[pv] kept for %s\n", P.vid);
 }
 /* the choice kept for this title, applied when it can be: 1 handled (done, or waiting for the file's tracks), 0 nothing kept / not found: the usual automatic choice follows */
 static int pv_try_sub(void) {
