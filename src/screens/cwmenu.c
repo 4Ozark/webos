@@ -207,7 +207,7 @@ void cwmenu_show(const Item *it) {
   snprintf(M.kind, sizeof M.kind, "%s", T(!strcmp(it->type, "series") ? "Series" : "Movie"));
   M.sub[0] = 0; const char *c = strrchr(it->videoId, ':');
   if (c) { const char *p = c - 1; while (p > it->videoId && *p != ':') p--; if (*p == ':') { char s[8], e[8]; snprintf(s, sizeof s, "%d", atoi(p + 1)); snprintf(e, sizeof e, "%d", atoi(c + 1)); snprintf(M.sub, sizeof M.sub, "%s", T2("Season {s} · Episode {e}", "s", s, "e", e)); if (it->epName[0]) { size_t l = strlen(M.sub); snprintf(M.sub + l, sizeof M.sub - l, "  ·  %s", it->epName); } } }
-  if (it->ep) add(A_STREAMS, "play", T("Streams")); else add(A_PLAY, "play", T(it->cw ? "Resume" : "Play"));
+  if (it->ep) add(A_STREAMS, "play", T("Streams")); else add(A_PLAY, "play", T(it->cw && it->progress > 0 ? "Resume" : "Play")); /* (a series whose next episode waits is in the row with nothing played: Play) */
   Uint32 tm0 = SDL_GetTicks(); CwInfo ci; if (lib_cw_info(it, &ci) && (!it->ep || !strcmp(ci.vid, it->videoId))) add(A_RESTART, "restart", T("Watch from the beginning"));
   if (!it->ep) add(A_DETAILS, "info", T("Details"));
   int canMark = strcmp(it->type, "series") || strchr(it->videoId, ':');

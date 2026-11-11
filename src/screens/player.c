@@ -7,6 +7,8 @@
 #include "core/net.h"
 #include "core/store.h"
 #include "core/subs.h"
+#include "core/subprefs.h"
+#include "platform/plat.h"
 #include "core/video.h"
 #include "ui/shared.h"
 #include "ui/gfx.h"
@@ -140,7 +142,7 @@ static struct {
     /* the same conversion for a Dolby Vision profile 7 picture: dv the picture goes out as 8.1, copyA the audio track as
        it is, dvTried started once already, dvSeen what the TV showed was checked */
     int dv, copyA, dvTried, dvSeen; double dvAt; } dts;
-  int assPlain; /* styled subtitles were too slow here: plain for the rest of this film */ double lastSave; int marked; char aspect[8]; const char *res; char infoKey[256]; int pausedShown; double pausedAt;
+  int assPlain; /* styled subtitles were too slow here: plain for the rest of this film */ double lastSave; int marked, advanced; /* advanced: this episode is done and the title's state already points at the next one: nothing saves over it */ char aspect[8]; const char *res; char infoKey[256]; int pausedShown; double pausedAt;
   /* torrents: resolved by the engine first; the file's own subtitles and chapters from the stream itself */
   int isP2p, resolving; double posTick; int mkvTracksOk, chapWant;
   Nudge nudge; double nameAt;
@@ -244,10 +246,18 @@ static int episodic(void) {
   const cJSON *v = P.meta ? js_arr(P.meta, "videos") : NULL; return v && cJSON_GetArraySize(v) > 1;
 }
 static Item lib_item(void) { Item it; memset(&it, 0, sizeof it); snprintf(it.id, sizeof it.id, "%s", P.id); snprintf(it.type, sizeof it.type, "%s", P.type); snprintf(it.name, sizeof it.name, "%s", P.name); snprintf(it.poster, sizeof it.poster, "%s", P.poster); snprintf(it.background, sizeof it.background, "%s", P.bg); snprintf(it.logo, sizeof it.logo, "%s", P.logo); return it; }
-static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
+static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || P.advanced || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
 static void mark_watched(void) {
   if (P.isTrailer || P.marked || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
   if (episodic() && P.videos) { const char *ids[1] = { P.vid }; lib_set_eps_watched(l, P.videos, ids, 1, 1); } else lib_set_movie_watched(l, 1);
+}
+/* The episode is done and the next one is known (from the title page's data, no request): the title's state moves on to it, so
+   Continue Watching shows it as soon as the player closes, without the series page being opened. Not for a film, a trailer,
+   the last episode, or when the next episode is not known yet (then nothing changes: the title page still finds it). */
+static int up_next_ok(void) { return !P.isTrailer && !P.advanced && P.next.has && P.next.vid[0] && P.id[0] && episodic() && !getenv("SB_PLAY_NOSAVE"); }
+static void advance_up_next(void) {
+  if (!up_next_ok()) return; Item it = lib_item();
+  lib_set_up_next(P.id, &it, P.next.vid); P.advanced = 1; /* (set even when it was so already: nothing may save over it) */
 }
 static char resumeMsg[80];
 static void try_resume(void) {
@@ -263,6 +273,27 @@ static void try_resume(void) {
 static const char *want_sub(void) { return store_get("subsLang", "eng"); }
 static int size_idx(void) { int i = atoi(store_get("subtitleSize", "2")); return i < 0 || i > 6 ? 2 : i; }
 static const int SUB_SIZES[] = { 72, 80, 100, 120, 140, 160, 180 };
+/* Font: the viewer's subtitle font (core/subprefs.c), for the text engine as a face id (0: the app's own), and for a styled track as a file */
+static int sub_face_id(void) {
+  static unsigned ser; static int id; if (ser == store_serial() && ser) return id; ser = store_serial(); id = 0;
+  const SubFont *f = subfont_at(subfont_index(store_get("subsFont", "auto")));
+  if (f->file) { char p[640]; snprintf(p, sizeof p, "%s/fonts/%s", plat_asset_dir(), f->file); id = text_face_register(p); }
+  return id;
+}
+static void sub_ass_font(const char *lang, char *path, size_t pcap, char *fam, size_t fcap) { /* "" when the app's own font stays */
+  const SubFont *f = subfont_for_track(store_get("subsFont", "auto"), lang); path[0] = fam[0] = 0; if (!f) return;
+  snprintf(path, pcap, "%s/fonts/%s", plat_asset_dir(), f->file); snprintf(fam, fcap, "%s", f->family);
+}
+/* Position: where the lines sit (core/subprefs.c), in layout units, + raises. The default is where they always sat. */
+static int pos_idx(void) { return subpos_index(store_get("subsPos", "0")); }
+static float sub_pos_off(void) { return subpos_offset(pos_idx()); }
+/* v: the page's bottom (8 % at rest; higher while the controls, the seek bar or a tray are up). Raising never goes lower than what
+   the controls need: it wins only once it is higher. Lowering applies at rest only (it fades out as the page's bottom lifts). */
+static float sub_bottom(float v) {
+  float rest = SB_H * 0.08f, off = sub_pos_off(); if (off == 0) return v;
+  if (off > 0) return fmaxf(v, rest + off);
+  return v + off * (1 - clampf((v - rest) / 60.0f, 0, 1));
+}
 static const char *SUB_COLORS[] = { "#ffffff", "#ffe600", "#00e5ff" }, *SUB_BGS[] = { "0", "1", ".6" };
 static int bg_idx(void) { const char *v = store_get("subsBgStyle", "0"); for (int i = 0; i < 3; i++) if (!strcmp(SUB_BGS[i], v)) return i; return 0; }
 static int color_idx(void) { const char *v = store_get("subsColor", "#ffffff"); for (int i = 0; i < 3; i++) if (!strcasecmp(SUB_COLORS[i], v)) return i; return -1; }
@@ -335,13 +366,14 @@ static void ass_sync(void) {
   int want = k >= 0 && embKind[k] == 2;
   static int openN = -1; static const void *openMkv;
   if (!want) { if (asssubs_on()) { asssubs_close(); openN = -1; } return; }
-  if (!asssubs_on() || openN != n || openMkv != mkv) { asssubs_open(mkv, n, P.url, P.emb[k].lang); openN = n; openMkv = mkv; }
+  static char openFont[512]; char fontNow[512], famNow[48]; sub_ass_font(P.emb[k].lang, fontNow, sizeof fontNow, famNow, sizeof famNow);
+  if (!asssubs_on() || openN != n || openMkv != mkv || strcmp(openFont, fontNow)) { asssubs_open(mkv, n, P.url, P.emb[k].lang, fontNow[0] ? fontNow : NULL, fontNow[0] ? famNow : NULL); openN = n; openMkv = mkv; snprintf(openFont, sizeof openFont, "%s", fontNow); } /* (a new font choice: the styled track starts again in it) */
   if (asssubs_too_slow()) { P.assPlain = 1; asssubs_close(); openN = -1; mkv_style(mkv, n, 0); toast(T("Styled subtitles are too heavy here: shown plain"), 4000, NULL); return; }
   /* the picture's rectangle: fitted inside the screen (Fill and Zoom: the screen) */
   float vx = 0, vy = 0, vw = SB_W, vh = SB_H; int w = video_width(), h = video_height();
   if (w > 0 && h > 0 && !strcmp(P.aspect, "fit")) { float a = (float)w / h; if (a > SB_W / SB_H) { vh = SB_W / a; vy = (SB_H - vh) / 2; } else { vw = SB_H * a; vx = (SB_W - vw) / 2; } }
   VidState vs = video_state();
-  asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f);
+  asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f, sub_pos_off());
 }
 static void sync_auto_arm(void);
 static void auto_sub(void) {
@@ -980,7 +1012,7 @@ static void nx_part(StreamGroup *g, int gi, void *ud) {
 static void nx_done(int total, void *ud) { (void)total; if (P.open && P.nx.tok && (unsigned)(uintptr_t)ud == P.nx.tok) nx_finish(); }
 static void next_auto(void) {
   if (!P.next.has) { go_next(); return; }
-  mark_watched(); save_progress(1);
+  int up = up_next_ok(); mark_watched(); save_progress(!up); advance_up_next(); /* (the next stream is searched for now: if it is not found, or the player is left, Continue Watching already offers that episode) */
   char nv[80], info[700], url[SB_URL_MAX], addon[96], binge[96]; snprintf(nv, sizeof nv, "%s", P.next.vid); snprintf(info, sizeof info, "%s", P.sname); snprintf(url, sizeof url, "%s", P.st.url[0] ? P.st.url : P.url); snprintf(addon, sizeof addon, "%s", P.saddon); snprintf(binge, sizeof binge, "%s", P.st.binge);
   prepare(nv, 0, 0);
   snprintf(P.nx.vid, sizeof P.nx.vid, "%s", nv); snprintf(P.nx.info, sizeof P.nx.info, "%s", info); snprintf(P.nx.binge, sizeof P.nx.binge, "%s", binge); snprintf(P.nx.url, sizeof P.nx.url, "%s", url); snprintf(P.nx.addon, sizeof P.nx.addon, "%s", addon);
@@ -989,7 +1021,7 @@ static void next_auto(void) {
 }
 static void go_next(void) {
   if (P.next.has && !P.nextTried) { P.nextTried = 1; next_auto(); }
-  else if (P.next.has) { mark_watched(); snprintf(closeVid, sizeof closeVid, "%s", P.next.vid); close_player(1, 0); }
+  else if (P.next.has) { mark_watched(); advance_up_next(); snprintf(closeVid, sizeof closeVid, "%s", P.next.vid); close_player(1, 0); }
   else if (P.sim) close_player(0, 1);
 }
 
@@ -1013,7 +1045,7 @@ static const float C_GLIDE[4] = { .25f, 1, .5f, 1 }; /* GLIDE_EASE's curve, for 
 static struct {
   Mo tabX, tabW, tabF; int tabSeen; Mo swA; int swDir, swPend; Mo colBX, colBA; int colBSeen; int quiet;
   unsigned colSig[4], rowSig; Mo colA[4], rowA; int onIdx[4], rowOn; Mo chkA[4], rowChk; int vkC; char vkU[8]; Mo vkA;
-  Mo dot[4]; int dotSeen[4]; /* 0 the picture size, 1 subtitle size, 2 colour, 3 background */
+  Mo dot[5]; int dotSeen[5]; /* 0 the picture size, 1 subtitle size, 2 colour, 3 background, 4 subtitle position */
   Mo swK[2]; int swFrom[2], swCur[2], swSeen[2]; /* the colour and background swatches: the one before, the one now, how far it has come */
 } TM;
 static void tm_tick(float dt) {
@@ -1023,7 +1055,7 @@ static void tm_tick(float dt) {
 static void tm_reset(void) { /* a tray opening: everything where it is, nothing gliding in from an old place */
   TM.tabSeen = TM.colBSeen = TM.swPend = 0; mo_set(&TM.swA, 1); mo_set(&TM.colBA, 0); mo_set(&TM.tabF, 0); mo_set(&TM.vkA, 1); TM.vkU[0] = 0;
   for (int i = 0; i < 4; i++) { mo_set(&TM.colA[i], 1); mo_set(&TM.chkA[i], 1); TM.onIdx[i] = -2; TM.colSig[i] = 0; } mo_set(&TM.rowA, 1); mo_set(&TM.rowChk, 1); TM.rowOn = -2; TM.rowSig = 0;
-  for (int i = 1; i < 4; i++) TM.dotSeen[i] = 0; TM.swSeen[0] = TM.swSeen[1] = 0;
+  for (int i = 1; i < 5; i++) TM.dotSeen[i] = 0; TM.swSeen[0] = TM.swSeen[1] = 0;
 }
 static unsigned str_sig(unsigned h, const char *s) { while (*s) h = h * 31 + (unsigned char)*s++; return h * 31 + 7; }
 static int item_on(const TItem *it) { return strncmp(it->u, "lang:", 5) ? it->on && !it->tool : it->d > 0; }
@@ -1180,6 +1212,7 @@ static void tray_data(void) {
       else if (!c2->n && P.adxLoading) { col_add(c2, 1); col_add(c2, 1); }
     }
     int ci = color_idx(); x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Size")); snprintf(x->vl, 48, "%d%%", SUB_SIZES[size_idx()]); snprintf(x->u, 1024, "size");
+    x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Position")); snprintf(x->vl, 48, "%s", T(subpos_label(pos_idx()))); snprintf(x->u, 1024, "pos"); /* each press: one place up, then round to the lowest */
     x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Colour")); snprintf(x->u, 1024, "color"); /* colour and background: shown by their swatch (drawn with the column) */
     x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Background")); snprintf(x->u, 1024, "bg"); (void)ci;
     if (!P.isTrailer && !strncmp(P.curSub, "ext:", 4)) { x = col_add(c4, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Auto-sync")); snprintf(x->sub, 120, "%s", SY.st); snprintf(x->u, 1024, "sync"); } /* a downloaded subtitle: lined up with the file's own */
@@ -1268,6 +1301,7 @@ static void tray_back(void) {
 }
 static void adjust(const char *k) {
   if (!strcmp(k, "size")) { char v[4]; snprintf(v, sizeof v, "%d", (size_idx() + 1) % 7); store_set("subtitleSize", v); }
+  else if (!strcmp(k, "pos")) store_set("subsPos", subpos_value((pos_idx() + 1) % SUBPOS_N));
   else if (!strcmp(k, "color")) { int ci = color_idx(); store_set("subsColor", SUB_COLORS[((ci < 0 ? 0 : ci) + 1) % 3]); }
   else if (!strcmp(k, "bg")) store_set("subsBgStyle", SUB_BGS[(bg_idx() + 1) % 3]);
   render_tray(0);
@@ -1874,7 +1908,7 @@ void player_tick(float dt) {
     if (P.seekTxtUntil && now_() >= P.seekTxtUntil) { P.seekTxtUntil = 0; P.skOn = 0; P.skm = 0; }
     if (P.mode == 1 && now_() >= P.hideAt && !paused() && P.seekT < 0) hide_osd();
     if (vs == VID_PLAYING && now_() - P.lastSave >= 10) { save_progress(0); if (dur() > 0 && video_time() / dur() > 0.95) mark_watched(); }
-    if (vs == VID_ENDED && !P.ended) { P.ended = 1; save_progress(1); mark_watched(); if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
+    if (vs == VID_ENDED && !P.ended) { P.ended = 1; int up = up_next_ok(); save_progress(!up); mark_watched(); advance_up_next(); /* (up: the one push is the state moved on to the next episode) */ if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
     if (P.endGoAt && now_() >= P.endGoAt) { P.endGoAt = 0; go_next(); if (!P.open || P.closing) return; }
     check_prompt();
     if (P.prompt.autoN && (P.prompt.k == 1 || P.prompt.k == 2) && now_() - P.prompt.t0 >= P.prompt.adur && !paused()) prompt_go(0);
@@ -1978,8 +2012,8 @@ static void draw_mkv_line(const MkvLine *l, float bx, float by, int px, uint32_t
     for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(lp[i], bx + ox[d], y + oy[d] + (lh - text_line_height(px)) / 2, px, 600, ol, 0, 0, align); }
     text_draw(lp[i], bx, y + (lh - text_line_height(px)) / 2, px, 600, col, 0, 0, align); y += lh; }
 }
-static void draw_subs(void) {
-  float bottom = P.subB.v; /* the page's bottom: 8 %, above the controls (420), the seek bar (200) or an open tray (62 %), gliding 0.3 s */
+static void draw_subs_(void) {
+  float bottom = sub_bottom(P.subB.v); /* the page's bottom: 8 %, above the controls (420), the seek bar (200) or an open tray (62 %), gliding 0.3 s; the viewer's Position on top */
   if (asssubs_on()) { asssubs_draw(); return; } /* styled (libass) */
   if (!strncmp(P.curSub, "emb:", 4) && SL.mkv && !SL.tv && mkv) { /* the file's own lines (the TV draws them while it holds the track) */
     MkvLine ls[8]; static char tb[4096]; int n = mkv_lines_at(mkv, atoi(P.curSub + 4), video_time() - P.subDelay, ls, 8, tb, sizeof tb); if (!n) return;
@@ -2012,12 +2046,13 @@ static void draw_subs(void) {
     SC.lines = 0; snprintf(SC.buf, sizeof SC.buf, "%s", all); for (char *c = strtok(SC.buf, "\n"); c && SC.lines < 12; c = strtok(NULL, "\n")) SC.lp[SC.lines++] = c;
     SC.mw = 0; for (int i = 0; i < SC.lines; i++) SC.mw = fmaxf(SC.mw, text_width(SC.lp[i], px, 600, 0)); }
   int lines = SC.lines; char **lp = SC.lp;
-  float y = SB_H - bottom - lines * lh;
+  float y = SB_H - bottom - lines * lh; if (y < 40) y = 40; /* (a high Position and many lines: never off the top) */
   if (bo > 0) { float mw = SC.mw; gfx_rrect(SB_W / 2 - mw / 2 - 16, y - 2, mw + 32, lines * lh + 4, 8, BLACK_A((int)(bo * 255))); } /* one box around the lines, as the page's span */
   for (int i = 0; i < lines; i++) {
     for (int d = 0; d < 8; d++) { static const float ox[8] = { -2, 2, 0, 0, -1, 1, -1, 1 }, oy[8] = { 0, 0, -2, 2, -1, 1, 1, -1 }; text_draw(lp[i], SB_W / 2 + ox[d], y + oy[d] + (lh - text_line_height(px)) / 2, px, 600, ol, 0, 0, ALIGN_CENTER); }
     text_draw(lp[i], SB_W / 2, y + (lh - text_line_height(px)) / 2, px, 600, col, 0, 0, ALIGN_CENTER); y += lh; }
 }
+static void draw_subs(void) { int f = sub_face_id(); text_face(f); draw_subs_(); text_face(0); } /* (the subtitle font only for the subtitle lines) */
 /* the CC button of a trailer: the subtitles icon, and when they are off a slash drawn from its top-left (0.26 s) with a gap cut around it */
 static void cc_icon(float x, float y, float sz, uint32_t col, uint32_t gap) {
   float k = P.ccS.v, u = sz / 24; icon_draw("p_subs", x, y, sz, col_alpha(col, k > 0.5f && col == WHITE_A(255) ? 0.8f : 1));
@@ -2319,10 +2354,11 @@ static void draw_tray(void) {
         float tx = 6 + (it->tool ? 18 : 14); if (!it->tool) { if (it->spin) { float cx = tx + 12, cy = yy + h / 2; gfx_ring(cx - 11, cy - 11, 22, 22, 11, 3, WHITE_A(51)); float ph = clock_ph(0.9) * 6.2832f; for (int q = 0; q <= 8; q++) { float an = ph - 2.356f + 1.5708f * q / 8; gfx_circle(cx + cosf(an) * 9.5f, cy + sinf(an) * 9.5f, 1.5f, ACC2); } } /* chosen, its lines still loading: the notes' spinner in place of the tick */
           else if (item_on(it)) icon_draw("check", tx + 1, yy + h / 2 - 11, 22, col_alpha(ACC2, i == TM.onIdx[c] ? TM.chkA[c].v : 1)); tx += 24 + 12; }
         /* a value that cycles: its dots under it, the lit one gliding along; a value just changed fades up */
-        int dk = !it->tool ? 0 : !strcmp(it->u, "size") ? 1 : !strcmp(it->u, "color") ? 2 : !strcmp(it->u, "bg") ? 3 : 0; float va = TM.vkC == c && it->tool && !strcmp(TM.vkU, it->u) ? TM.vkA.v : 1, vy0 = dk ? -5 : 0;
-        float right = 6 + 232 - 18; if (dk >= 2) { swatch_draw(dk - 2, dk == 2 ? (color_idx() < 0 ? 0 : color_idx()) : bg_idx(), right - 13, yy + h / 2, 13); right -= 26 + 10; }
+        int dk = !it->tool ? 0 : !strcmp(it->u, "size") ? 1 : !strcmp(it->u, "color") ? 2 : !strcmp(it->u, "bg") ? 3 : !strcmp(it->u, "pos") ? 4 : 0; float va = TM.vkC == c && it->tool && !strcmp(TM.vkU, it->u) ? TM.vkA.v : 1, vy0 = dk ? -5 : 0;
+        float right = 6 + 232 - 18; if (dk == 2 || dk == 3) { swatch_draw(dk - 2, dk == 2 ? (color_idx() < 0 ? 0 : color_idx()) : bg_idx(), right - 13, yy + h / 2, 13); right -= 26 + 10; }
         if (it->vl[0]) { if (it->vw <= 0) it->vw = text_width(it->vl, 22, 700, 0); float vw = it->vw; text_draw(it->vl, right, yy + h / 2 - text_line_height(22) / 2.0f + vy0 + 6 * (1 - va), 22, 700, col_alpha(ACC3, va), 0, 0, ALIGN_RIGHT);
           if (dk == 1) cycle_dots(dk, 7, size_idx(), right, yy + h / 2 + 14, 9, 2.5f, WHITE_A(64), ACC3, 1);
+          else if (dk == 4) cycle_dots(dk, SUBPOS_N, pos_idx(), right, yy + h / 2 + 14, 9, 2.5f, WHITE_A(64), ACC3, 1);
           right -= vw + 10; } if (it->sw) { gfx_circle(right - 9, yy + h / 2, 9, it->sw); gfx_ring(right - 18, yy + h / 2 - 9, 18, 18, 9, 2, BLACK_A(77)); right -= 18 + 10; }
         int px = it->tool ? 23 : 24;
         if (it->sub[0] && it->tool) { float ly = yy + 12; text_draw(it->lb, tx, ly, px, 700, WHITE_A(255), 0, right - tx - 4, ALIGN_LEFT); text_draw_wrapped(it->sub, tx, ly + px * 1.25f + 2, 6 + 232 - 18 - tx, 2, 21, 600, WHITE_A(184), 0, ALIGN_LEFT, 26); } /* Auto-sync: what it did, on up to two lines */

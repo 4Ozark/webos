@@ -1,0 +1,35 @@
+# EXPERIMENTAL / NOT YET RUN: builds the webOS IPK on GitHub's runners.
+# The build tools are given as inputs so a wrong default can be fixed without editing this file.
+# Without libsbengine.so / libsbdts.so (torrents, DTS) the IPK still installs; those two features are simply unavailable.
+name: Build IPK
+on:
+  workflow_dispatch:
+    inputs:
+      zig_url:
+        description: "Zig 0.17.0 Linux x86_64 tarball URL (tools/build.sh is written for 0.17.0)"
+        required: true
+      sdk_url:
+        description: "webOS buildroot SDK tarball URL"
+        required: true
+        default: "https://github.com/openlgtv/buildroot-nc4/releases/latest/download/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz"
+jobs:
+  ipk:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Tools
+        run: |
+          set -e
+          npm i -g @webos-tools/cli
+          mkdir -p "$HOME/origin-build/zig" "$HOME/origin-build/sdk"
+          curl -fsSL "${{ inputs.zig_url }}" | tar -xJ -C "$HOME/origin-build/zig" --strip-components=1
+          curl -fsSL "${{ inputs.sdk_url }}" | tar -xz -C "$HOME/origin-build/sdk"
+          SYSROOT=$(find "$HOME/origin-build/sdk" -type d -name sysroot -path '*arm-webos-linux-gnueabi*' | head -1)
+          echo "ZIG=$HOME/origin-build/zig/zig" >> "$GITHUB_ENV"
+          echo "SDK=$SYSROOT" >> "$GITHUB_ENV"
+      - name: Build and package
+        run: tools/package.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: ipk, path: dist/*.ipk }

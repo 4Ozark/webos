@@ -34,13 +34,15 @@
 enum { FAM_LATIN = 0, FAM_ARABIC = 1, FAM_FB = 2 };   /* fam >= FAM_FB: the fallback file fam - FAM_FB */
 enum { FID_NONE = -1, FID_TAG = -2 };                  /* a run's font: no font has it (dropped); a flag drawn as a tag */
 /* bitmap: 1 = colour PNG glyphs only (drawn as a mask), -1 = FreeType could not open it; ftpx: the FT size of a fallback face */
-typedef struct { int fam, weight; FT_Face face; hb_font_t *hb; int px, ftpx, bitmap; } Font;
+typedef struct { int fam, weight; FT_Face face; hb_font_t *hb; int px, ftpx, bitmap; int ovFace; /* a subtitle font's id (text_face_register), 0: one of the app's own */ } Font;
 #define MAX_FONTS 16
 #define MAX_FB 64
+#define MAX_FACE 8   /* subtitle fonts the viewer may have tried (id 0 is the app's own) */
+#define MAX_OVF 12
 #define CPC_N 1024
 /* one font set per thread: the drawing thread's, and the text thread's (FreeType faces are not shared across threads).
    fb: this thread's fallback fonts (fbState 0 untried, 1 ready, -1 unusable); cpc: which font a lone codepoint takes */
-typedef struct { FT_Library lib; Font f[MAX_FONTS]; int n; Font fb[MAX_FB]; signed char fbState[MAX_FB]; Font *inter; uint32_t cpcKey[CPC_N]; short cpcFont[CPC_N]; } FontSet;
+typedef struct { FT_Library lib; Font f[MAX_FONTS]; int n; Font fb[MAX_FB]; signed char fbState[MAX_FB]; Font ov[MAX_OVF]; int nov; signed char ovBad[MAX_FACE]; Font *inter; uint32_t cpcKey[CPC_N]; short cpcFont[CPC_N]; } FontSet;
 static FontSet mainSet; static _Thread_local FontSet *FS; static _Thread_local int shapeRtl;
 #define fonts (FS->f)
 #define nfonts (FS->n)
@@ -70,7 +72,7 @@ static Font *font_get(int fam, int weight) {
     FT_Set_Var_Design_Coordinates(f->face, mm->num_axis < 8 ? mm->num_axis : 8, coords);
     FT_Done_MM_Var(ft, mm);
   }
-  f->fam = fam; f->weight = weight; f->px = 0; f->ftpx = 0; f->bitmap = 0;
+  f->fam = fam; f->weight = weight; f->px = 0; f->ftpx = 0; f->bitmap = 0; f->ovFace = 0;
   f->hb = hb_ft_font_create_referenced(f->face);
   hb_ft_font_set_load_flags(f->hb, FT_LOAD_DEFAULT | FT_LOAD_NO_HINTING);
   nfonts++;
@@ -194,6 +196,46 @@ static long read_file(const char *path, unsigned char **out) {
   FILE *fp = fopen(path, "rb"); if (!fp) return 0;
   fseek(fp, 0, SEEK_END); long n = ftell(fp); fseek(fp, 0, SEEK_SET);
   *out = malloc(n); if (fread(*out, 1, n, fp) != (size_t)n) { free(*out); *out = NULL; n = 0; } fclose(fp); return n;
+}
+/* ---- subtitle fonts -------------------------------------------------------------------------
+   The viewer's subtitle font (Settings > Subtitles > Font). A face is a font file registered by path; its bytes are read
+   the first time a line needs it and kept (at most MAX_FACE files, none ever freed: both threads' FreeType faces read them).
+   text_face(id) says which one the next text calls use (the drawing thread; 0 = the app's own fonts); it is part of the line's
+   cache key, so a line drawn in one font is never taken for the same words in another. A subtitle face replaces Inter (Latin runs) and
+   Noto Sans Arabic (Arabic runs) only for a run it has every character of; anything it lacks stays in the app's fonts. */
+static char facePath[MAX_FACE][320]; static unsigned char *faceData[MAX_FACE]; static long faceLen[MAX_FACE]; static signed char faceState[MAX_FACE];
+static int nface = 1; static pthread_mutex_t facemu = PTHREAD_MUTEX_INITIALIZER;
+static int curFace; static _Thread_local int shapeFace;   /* curFace: the drawing thread's current face; shapeFace: the one this thread shapes with */
+int text_face_register(const char *path) {
+  if (!path || !*path || strlen(path) >= sizeof facePath[0]) return 0;
+  pthread_mutex_lock(&facemu); int id = 0;
+  for (int i = 1; i < nface && !id; i++) if (!strcmp(facePath[i], path)) id = i;
+  if (!id && nface < MAX_FACE) { id = nface++; snprintf(facePath[id], sizeof facePath[id], "%s", path); }
+  pthread_mutex_unlock(&facemu); return id;
+}
+void text_face(int id) { curFace = id > 0 && id < MAX_FACE ? id : 0; shapeFace = curFace; }
+static const unsigned char *face_data(int id, long *n) {
+  pthread_mutex_lock(&facemu);
+  if (!faceState[id]) { faceLen[id] = read_file(facePath[id], &faceData[id]); faceState[id] = faceData[id] && faceLen[id] > 0 ? 1 : -1; if (faceState[id] < 0) fprintf(stderr, "[text] subtitle font not readable: %s\n", facePath[id]); }
+  const unsigned char *d = faceState[id] > 0 ? faceData[id] : NULL; *n = faceLen[id]; pthread_mutex_unlock(&facemu); return d;
+}
+/* this thread's font on subtitle face id, for the app's family fam (FAM_LATIN or FAM_ARABIC: it keeps that family's script and shaping rules), at weight */
+static Font *ov_font(int id, int fam, int weight) {
+  if (id <= 0 || id >= MAX_FACE || FS->ovBad[id]) return NULL;
+  for (int i = 0; i < FS->nov; i++) if (FS->ov[i].ovFace == id && FS->ov[i].fam == fam && FS->ov[i].weight == weight) return &FS->ov[i];
+  long n = 0; const unsigned char *d = face_data(id, &n); if (!d) { FS->ovBad[id] = 1; return NULL; }
+  if (FS->nov >= MAX_OVF) return NULL;
+  Font *f = &FS->ov[FS->nov]; memset(f, 0, sizeof *f);
+  if (FT_New_Memory_Face(ft, d, n, 0, &f->face)) { FS->ovBad[id] = 1; return NULL; }
+  FT_MM_Var *mm = NULL; /* a variable font: its weight axis, as for the app's own fonts */
+  if (!FT_Get_MM_Var(f->face, &mm) && mm) {
+    FT_Fixed coords[8]; unsigned a;
+    for (a = 0; a < mm->num_axis && a < 8; a++) { coords[a] = mm->axis[a].def;
+      if (mm->axis[a].tag == FT_MAKE_TAG('w', 'g', 'h', 't')) { FT_Fixed w = (FT_Fixed)weight << 16; if (w < mm->axis[a].minimum) w = mm->axis[a].minimum; if (w > mm->axis[a].maximum) w = mm->axis[a].maximum; coords[a] = w; } }
+    FT_Set_Var_Design_Coordinates(f->face, mm->num_axis < 8 ? mm->num_axis : 8, coords); FT_Done_MM_Var(ft, mm); }
+  f->fam = fam; f->weight = weight; f->ovFace = id;
+  f->hb = hb_ft_font_create_referenced(f->face); hb_ft_font_set_load_flags(f->hb, FT_LOAD_DEFAULT | FT_LOAD_NO_HINTING);
+  FS->nov++; return f;
 }
 static void *text_worker(void *a); static int textThread; static double syncMs; static void text_take(void);
 int text_init(const char *assetDir, float surfaceScale) {
@@ -338,7 +380,7 @@ static float shape_run(Shaped *out, Font *f, const uint32_t *cps, int a, int b, 
   else hb_buffer_set_script(buf, f->fam == FAM_ARABIC ? HB_SCRIPT_ARABIC : HB_SCRIPT_LATIN);
   hb_buffer_set_language(buf, hb_language_get_default());
   hb_feature_t feats[2] = { { HB_TAG('c','v','1','1'), 1, 0, (unsigned)-1 }, { HB_TAG('s','s','0','1'), 1, 0, (unsigned)-1 } }; /* the web app's Inter features */
-  hb_shape(f->hb, buf, f->fam == FAM_LATIN ? feats : NULL, f->fam == FAM_LATIN ? 2 : 0);
+  hb_shape(f->hb, buf, f->fam == FAM_LATIN && !f->ovFace ? feats : NULL, f->fam == FAM_LATIN && !f->ovFace ? 2 : 0);
   unsigned n = hb_buffer_get_length(buf);
   hb_glyph_info_t *gi = hb_buffer_get_glyph_infos(buf, NULL); hb_glyph_position_t *gp = hb_buffer_get_glyph_positions(buf, NULL);
   float x = penX;
@@ -366,6 +408,7 @@ static float shape_tag(Shaped *out, const uint32_t *cps, int a, int b, int px, f
 }
 static int strong_script(hb_script_t sc) { return sc && sc != HB_SCRIPT_COMMON && sc != HB_SCRIPT_INHERITED && sc != HB_SCRIPT_UNKNOWN; }
 /* the whole line: cps are logical order; returns total advance; fills `out` in visual order */
+static int run_covered(Font *f, const uint32_t *cps, int a, int b) { for (int k = a; k < b; k++) if (!is_ign(cps[k]) && !font_has(f, cps[k])) return 0; return 1; }
 static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int weight, float tracking) {
   if (n <= 0) return 0;
   FriBidiCharType *types = malloc(n * sizeof *types); FriBidiBracketType *brk = malloc(n * sizeof *brk);
@@ -406,6 +449,7 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
     Run *r = &runs[map[k]];
     if (r->fid == FID_TAG) { pen += shape_tag(out, cps, r->a, r->b, px, tracking, pen); continue; }
     Font *f = r->fid >= FAM_FB ? fb_font(r->fid - FAM_FB) : font_get(r->fid, weight); if (!f) f = font_get(FAM_LATIN, weight); if (!f) continue;
+    if (shapeFace && (r->fid == FAM_LATIN || r->fid == FAM_ARABIC)) { Font *o = ov_font(shapeFace, r->fid, weight); if (o && run_covered(o, cps, r->a, r->b)) f = o; } /* the viewer's subtitle font, for a run it has all of */
     pen += shape_run(out, f, cps, r->a, r->b, r->lv & 1, px, tracking, pen, r->sc, weight >= 600 && f->fam >= FAM_FB);
   }
   free(types); free(brk); free(levels); free(runs); free(rl); free(map);
@@ -550,7 +594,7 @@ static int fit_ellipsis(uint32_t *cps, int n, int px, int weight, float tracking
    text work) is still made at once, so a small change shows in the same frame. */
 #define TEXT_SYNC_MS 2.5
 #define TQ 256
-typedef struct { char *key; unsigned hash; char *utf8; int px, weight, rtl; float tracking, maxW; } TReq;
+typedef struct { char *key; unsigned hash; char *utf8; int px, weight, rtl, face; float tracking, maxW; } TReq;
 typedef struct { char *key; unsigned hash; unsigned char *bmp; int w, h, asc, cut; float width; } TRes;
 static TReq tq[TQ]; static int tqh, tqn; static TRes tr[TQ]; static int trn;
 static pthread_mutex_t tmu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t tcv = PTHREAD_COND_INITIALIZER;
@@ -562,7 +606,7 @@ static void *text_worker(void *a) { plat_thread_background(4); (void)a;
   static FontSet ws; FS = &ws; if (FT_Init_FreeType(&ws.lib)) return NULL; ws.inter = font_get(FAM_LATIN, 400);
   for (;;) {
     pthread_mutex_lock(&tmu); while (!tqn) pthread_cond_wait(&tcv, &tmu); TReq q = tq[tqh]; tqh = (tqh + 1) % TQ; tqn--; pthread_mutex_unlock(&tmu);
-    shapeRtl = q.rtl;
+    shapeRtl = q.rtl; shapeFace = q.face;
     int n; uint32_t *cps = to_cps(q.utf8, &n, 1); int spx = (int)(q.px * sscale + 0.5f); float str = q.tracking * sscale;
     Shaped sh = { 0 }; shape_line(&sh, cps, n, spx, q.weight, str); int cut = 0;
     if (q.maxW > 0 && sh.width > q.maxW * sscale) { fit_ellipsis(cps, n, spx, q.weight, str, q.maxW * sscale, &sh); cut = 1; }
@@ -575,7 +619,7 @@ static void *text_worker(void *a) { plat_thread_background(4); (void)a;
 static int text_ask(const char *key, unsigned h, const char *utf8, int px, int weight, float tracking, float maxW) {
   if (npend >= TQ) return 0;
   pthread_mutex_lock(&tmu); if (tqn >= TQ) { pthread_mutex_unlock(&tmu); return 0; }
-  TReq *q = &tq[(tqh + tqn) % TQ]; q->key = strdup(key); q->hash = h; q->utf8 = strdup(utf8); q->px = px; q->weight = weight; q->rtl = uiRtl; q->tracking = tracking; q->maxW = maxW; tqn++;
+  TReq *q = &tq[(tqh + tqn) % TQ]; q->key = strdup(key); q->hash = h; q->utf8 = strdup(utf8); q->px = px; q->weight = weight; q->rtl = uiRtl; q->face = curFace; q->tracking = tracking; q->maxW = maxW; tqn++;
   pthread_cond_signal(&tcv); pthread_mutex_unlock(&tmu);
   pend[npend].key = strdup(key); pend[npend].hash = h; npend++;
   return 1;
@@ -595,7 +639,7 @@ static char *key_int(char *p, long v) { char t[24]; int n = 0; unsigned long u =
 static long key_round(float f) { return (long)(f >= 0 ? f + 0.5f : f - 0.5f); }
 static char keybuf[4200];
 static void build_key(char *b, size_t cap, const char *utf8, int px, int weight, float tracking, float maxW) {
-  char *q = b; q = key_int(q, px); *q++ = '|'; q = key_int(q, weight); *q++ = '|'; q = key_int(q, key_round(tracking * 100)); *q++ = '|'; q = key_int(q, key_round(maxW)); *q++ = '|'; q = key_int(q, uiRtl); *q++ = '|';
+  char *q = b; q = key_int(q, px); *q++ = '|'; q = key_int(q, weight); *q++ = '|'; q = key_int(q, key_round(tracking * 100)); *q++ = '|'; q = key_int(q, key_round(maxW)); *q++ = '|'; q = key_int(q, uiRtl); *q++ = '|'; if (curFace) { *q++ = 'f'; q = key_int(q, curFace); *q++ = '|'; } /* (a subtitle font: its own lines) */
   size_t n = strlen(utf8), room = cap - (size_t)(q - b) - 1; if (n > room) n = room; memcpy(q, utf8, n); q[n] = 0;
 }
 static const SbLine *text_line_(const char *utf8, int px, int weight, float tracking, float maxW);

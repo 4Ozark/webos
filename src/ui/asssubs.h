@@ -6,12 +6,15 @@
 #define SB_ASSSUBS_H
 #include "core/mkvsubs.h"
 /* starts styled drawing of track n (url: the file, for its fonts; lang: the track's language, for the fallback font) */
-void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang);
+/* fontPath / fontFamily: the viewer's subtitle font file and its family name (both NULL: the app's own font for the language); it is the
+   default and fallback font only, the file's own fonts and the ones its styles name are used as before */
+void asssubs_open(MkvSession *mkv, int n, const char *url, const char *lang, const char *fontPath, const char *fontFamily);
 void asssubs_close(void);                           /* before the reader is closed; the thread finishes on its own */
 int  asssubs_on(void);
 /* per frame while on: the subtitle time (seconds, the viewer's delay applied), whether it runs, the picture's rate and
-   where it sits (layout units) with its own size; scale: the viewer's subtitle size (1 = 100 %) */
-void asssubs_tick(double t, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale);
+   where it sits (layout units) with its own size; scale: the viewer's subtitle size (1 = 100 %); lift: the viewer's Position
+   (layout units, + raises the lines the script leaves at the bottom; 0 = where the script puts them) */
+void asssubs_tick(double t, int playing, double fps, float vx, float vy, float vw, float vh, int videoW, int videoH, float scale, float lift);
 void asssubs_draw(void);
 int  asssubs_too_slow(void);                        /* 1 once: renders stayed above 40 ms: drawn plain from now on */
 double asssubs_render_ms(void); /* the styled renders' running average (0 before the first) */

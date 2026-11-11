@@ -93,7 +93,7 @@ static void ago(int days, char *out, size_t cap) {
 static int ep_watched(void) { return lib_is_marked_watched(&R.it); }
 static void opt_label(int kind, char *out, size_t cap, const char **icon) {
   switch (kind) {
-    case O_PLAY: { cJSON *lb = lib_get(R.it.id); int rs = R.it.cw || js_num(js_obj(lb, "state"), "timeOffset", 0) > 60000; *icon = "play"; snprintf(out, cap, "%s", T(rs ? "Resume" : "Play")); break; }
+    case O_PLAY: { cJSON *lb = lib_get(R.it.id); int rs = (R.it.cw && R.it.progress > 0) || js_num(js_obj(lb, "state"), "timeOffset", 0) > 60000; *icon = "play"; snprintf(out, cap, "%s", T(rs ? "Resume" : "Play")); break; }
     case O_STREAMS: *icon = "play"; snprintf(out, cap, "%s", T("Streams")); break;
     case O_WATCHED: { int w = ep_watched(); *icon = w ? "eyeOff" : "eye"; snprintf(out, cap, "%s", T(w ? "Mark as unwatched" : "Mark as watched")); break; }
     case O_TRAILER: *icon = "trailer"; snprintf(out, cap, "%s", T("Trailer")); break;

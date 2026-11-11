@@ -24,6 +24,11 @@ typedef struct {
 } SbLine;
 
 int  text_init(const char *assetDir, float surfaceScale);
+/* The viewer's subtitle font. text_face_register: a font file's path to an id (0 when it cannot be kept); its bytes are read
+   the first time a line needs it. text_face(id): the text calls that follow (until the next one) draw with that font, for the
+   runs it has every character of (the rest stays in the app's fonts); 0 = the app's own. Drawing thread only. */
+int  text_face_register(const char *path);
+void text_face(int id);
 void text_set_rtl(int rtl);      /* the UI direction: START/END alignment, base paragraph direction */
 int  text_rtl(void);
 void text_frame_begin(void);     /* resets the per-frame rasterising budget */
