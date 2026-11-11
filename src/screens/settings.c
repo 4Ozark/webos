@@ -59,7 +59,7 @@ static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" 
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 9
 #define MAXROWS 48
-static Setting playBase[8], playS[8], subsS[9], audS[5], lookS[2], langS[2], keyS[4], addonS[40], acctS[1], supS[6];
+static Setting playBase[8], playS[8], subsS[9], audS[5], lookS[2], langS[3], keyS[4], addonS[40], acctS[1], supS[6];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -111,9 +111,9 @@ static int addon_opts(void) {
    Trakt (ratings, their spread, people's comments); Language points here */
 static int tmdbOn, traktOn;
 static int lang_opts(void) {
-  tmdbOn = tmdb_has_key(); if (tmdb_builtin()) return 1; /* the app's own key: nothing to add, the row and its preview go */
-  set_act(&langS[1], "__keys", "Titles and descriptions", tmdbOn ? "In the app\xe2\x80\x99s language, from TMDB (under Keys)" : "Only in English. Add a TMDB key under Keys");
-  return 2;
+  tmdbOn = tmdb_has_key(); if (tmdb_builtin()) return 2; /* the app's own key: nothing to add, the row and its preview go */
+  set_act(&langS[2], "__keys", "TMDB key", tmdbOn ? "In the app\xe2\x80\x99s language, from TMDB (under Keys)" : "Only in English. Add a TMDB key under Keys");
+  return 3;
 }
 static int keys_opts(void) {
   int n = 0; tmdbOn = tmdb_has_key(); traktOn = trakt_has_key();
@@ -193,7 +193,13 @@ static void build(void) {
     static const char *ORDER[] = { "fr", "es", "de", "it", "pt", "nl", "pl", "tr", "ru", "ar" }; /* the web's order */
     for (int j = 0; j < 10 && n < 40; j++) { int have = 0; for (int i = 0; i < i18n_lang_count(); i++) if (!strcmp(i18n_lang_code(i), ORDER[j])) have = 1; if (!have) continue;
       snprintf(s->dynS[n], 64, "%s", ORDER[j]); s->dyn[n].v = s->dynS[n]; s->dyn[n].lb = i18n_lang_name(ORDER[j]); n++; }
-    s->opts = s->dyn; s->nopts = n; }
+    s->opts = s->dyn; s->nopts = n;
+    /* the titles' own language, apart from the app's (the app in English, the titles and descriptions in Arabic): the same
+       languages, the first choice following the app */
+    Setting *c = &langS[1]; set_s(c, "contentLang", "Titles and descriptions", "Titles, descriptions and episode names, from TMDB", NULL, 0, "app");
+    int m = 0; c->dyn[m].v = "app"; c->dyn[m].lb = "Same as the app"; m++;
+    for (int j = 1; j < n && m < 40; j++) { snprintf(c->dynS[m], 64, "%s", s->dyn[j].v); c->dyn[m].v = c->dynS[m]; c->dyn[m].lb = s->dyn[j].lb; m++; }
+    c->opts = c->dyn; c->nopts = m; }
   int nl = lang_opts(), nk = keys_opts(), na = addon_opts();
   set_act(&acctS[0], "__logout", "Log out", S.acct); acctS[0].raw = 1;
   int nab = about_opts();
@@ -217,6 +223,7 @@ static int is_switch(const Setting *o) { return !o->action && !o->info && o->nop
 static const char *val_text(const Setting *o, char *buf, size_t cap) {
   if (o->off) return T("No drive");
   const char *cur = cur_val(o);
+  if (!strcmp(o->k, "contentLang")) { if (!strcmp(cur, "app") || (strcmp(cur, "en") && strcmp(i18n_lang_name(cur), cur) == 0)) { snprintf(buf, cap, "%s", T1("Same as the app ({lang})", "lang", i18n_lang_name(i18n_lang()))); return buf; } return i18n_lang_name(cur); }
   if (!strcmp(o->k, "uiLang")) { if (!strcmp(cur, "auto")) { snprintf(buf, cap, "%s", T1("Auto ({lang})", "lang", i18n_lang_name(i18n_tv_lang()))); return buf; } return i18n_lang_name(cur); }
   for (int i = 0; i < o->nopts; i++) if (!strcmp(o->opts[i].v, cur)) return T(o->opts[i].lb);
   return o->nopts ? T(o->opts[0].lb) : "";
@@ -389,7 +396,7 @@ static int key(int k) {
   else if ((k == K_LEFT || k == K_RIGHT) && op && op->info) { if (k == K_LEFT) S.zone = 0; else nudge_start(&S.nudge, k); }
   else if (k == K_RIGHT && op && op->action) nudge_start(&S.nudge, k);
   else if ((k == K_LEFT || k == K_RIGHT) && op && !op->action && op->nopts > 0) { /* flick through the values: applied at once */
-    if (!strcmp(op->k, "uiLang")) { open_pick(); return 1; } /* a new language restarts the app: choose it in the list */
+    if (!strcmp(op->k, "uiLang") || !strcmp(op->k, "contentLang")) { open_pick(); return 1; } /* a new language restarts the app: choose it in the list */
     if (is_switch(op)) { set_val(op, k == K_RIGHT ? "true" : "false", 0); return 1; }
     const char *cur = cur_val(op); int ci = 0; for (int i = 0; i < op->nopts; i++) if (!strcmp(op->opts[i].v, cur)) ci = i;
     ci = (ci + (k == K_RIGHT ? 1 : -1) + op->nopts) % op->nopts; set_val(op, op->opts[ci].v, app_mirror_key(k) == K_RIGHT ? 1 : -1); return 1; }
@@ -777,7 +784,7 @@ static void draw(void) {
       int f = j == S.pick, on = !strcmp(o->opts[j].v, cur); float nx = f ? nudge_x(&S.nudge) : 0, ny = f ? nudge_y(&S.nudge) : 0, ex = 18 * (1 - e) * (rtl ? -1 : 1);
       if (S.zone == 2) hit_add(clx, y, CLW, 68, pick_focus, NULL, j, 0);
       gfx_opacity_push(e);
-      const char *lb = !strcmp(o->k, "uiLang") ? o->opts[j].lb : T(o->opts[j].lb);
+      const char *lb = !strcmp(o->k, "uiLang") || (!strcmp(o->k, "contentLang") && j > 0) ? o->opts[j].lb : T(o->opts[j].lb); /* (languages in their own names) */
       line(lb, (rtl ? clx + CLW - 24 : clx + 24) + nx + ex, y + ny, 68, 28, on ? 600 : 400, f ? ACC_FG : on ? WHITE_A(255) : WHITE_A(209), 0, CLW - 48 - 40, al);
       if (on) icon_draw("check", (rtl ? clx + 24 + 2 : clx + CLW - 24 - 2 - 28) + nx + ex, y + 20 + ny, 28, f ? ACC_FG : ACC3);
       gfx_opacity_pop(); }

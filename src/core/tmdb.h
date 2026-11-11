@@ -1,8 +1,9 @@
-/* Titles, descriptions, genres, logos, posters and episode names in the app's language, from TMDB with
+/* Titles, descriptions, genres, logos, posters and episode names in the titles' language (i18n_content_lang: the app's own
+   unless chosen apart in Settings > Language), from TMDB with
    the user's own key (added from the phone: the TV keyboard is no place for 32 characters). Cinemeta is
    English only. One find + one details call per title (+ one per season for a series' page), kept 3 days
    on disk so a title costs nothing the second time. What TMDB has no translation for stays empty: the
-   English stays. English UI = no lookups.
+   English stays. English titles = no lookups.
 
    Everything here is for the main thread and never blocks: a lookup that is not known yet is queued for
    the workers and answered by a later frame (draw code reads tmdb_loc() every frame; nothing here does
@@ -32,7 +33,7 @@ void tmdb_key_clear(void);            /* "Remove the TMDB key" */
 /* changes whenever lookups start again (a key added or removed, another language): screens drop what they
    applied */
 unsigned tmdb_generation(void);
-int  tmdb_wanted(const char *id);     /* the UI is not English, there is a key, and it is an IMDb id */
+int  tmdb_wanted(const char *id);     /* the titles' language is not English, there is a key, and it is an IMDb id */
 
 /* the title in the app's language: NULL while unknown (then it is asked for), when TMDB has nothing for it
    or when lookups are off. light = 1 for rows (no episodes); 0 for a title page (a series' episodes too). */

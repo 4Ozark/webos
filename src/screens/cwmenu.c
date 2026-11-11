@@ -28,20 +28,21 @@
 #define CW 640.0f
 #define PX 36.0f
 #define IH 64.0f    /* an option, and 4 between them */
-enum { A_STREAMS, A_PLAY, A_RESTART, A_DETAILS, A_WATCHED, A_TRAILER, A_SIMILAR, A_REVIEWS, A_LIB };
+enum { A_STREAMS, A_PLAY, A_RESTART, A_DETAILS, A_WATCHED, A_CWOUT, A_TRAILER, A_SIMILAR, A_REVIEWS, A_LIB };
+#define NACT 10
 static struct {
-  int open, closing, idx, n; int acts[9]; char labels[9][96]; const char *icons[9]; Item it; char kind[32], sub[400];
+  int open, closing, idx, n; int acts[NACT]; char labels[NACT][96]; const char *icons[NACT]; Item it; char kind[32], sub[400];
   Tween x, op; /* the panel's slide and fade: an even ease-out (the quick-tween curve put it all in the first two frames) */ Tween out, grow; double openAt; SGlass glass; FPill pill; Nudge nudge; float h, titleLines;
   float from[5]; /* the card that was held, as it sat on screen: Reviews grows out of it */
 } M;
 static void close(void) { if (!M.open) return; M.open = 0; M.closing = 1; app_occluder_drop(); if (app_overlay) app_overlay = NULL; tween_set(&M.out, M.op.v); tween_to(&M.out, 0, 0.18f, EASE_IN_OUT); tween_to(&M.x, 28, 0.2f, EASE_CSS_EASEOUT); }
-static void add(int a, const char *icon, const char *label) { if (M.n >= 9) return; M.acts[M.n] = a; M.icons[M.n] = icon; snprintf(M.labels[M.n], sizeof M.labels[M.n], "%s", label); M.n++; }
+static void add(int a, const char *icon, const char *label) { if (M.n >= NACT) return; M.acts[M.n] = a; M.icons[M.n] = icon; snprintf(M.labels[M.n], sizeof M.labels[M.n], "%s", label); M.n++; }
 static void on_meta_toggle(cJSON *m, void *ud) { (void)ud; Item it = M.it; lib_toggle_watched(&it, js_arr(m, "videos")); app_refresh_boards(); if (SCR == SCR_DETAIL) detail_refresh_watched(); }
 /* what an action did, said on the title's own card: a glass chip over it ("Added to Library", "Marked as watched");
    adding, it then folds into its icon, which flies up to the Library tab in one eased arc (a faint trail behind it)
    and lights it as it lands; watched, it folds into the card's check, which pops in; a removal: the icon comes down
    from the tab and opens into the chip, which fades. About a second, all of it: quick, never abrupt */
-static struct { int kind; double t0; float px, py; char text[96]; const char *icon; int landed; char poster[512]; float lx, ly, vx, vy; } FX; /* poster: the title's, carried in the bubble; lx..vy its last place and speed */ /* kind: 1 added, 2 removed, 3 watched, 4 unwatched */
+static struct { int kind; double t0; float px, py; char text[96]; const char *icon; int landed; char poster[512]; float lx, ly, vx, vy; } FX; /* poster: the title's, carried in the bubble; lx..vy its last place and speed */ /* kind: 1 added, 2 removed, 3 watched, 4 unwatched, 5 out of Continue Watching */
 static void fx_start(int kind, const char *icon, const char *text) {
   float x = SB_W / 2, y = SB_H / 2; Screen *sc = screens[SCR]; if (!(sc && sc->origin && sc->origin(&x, &y))) { x = SB_W / 2; y = SB_H / 2; }
   FX.kind = kind; FX.t0 = app_now(); FX.px = x; FX.py = y; FX.icon = icon; FX.landed = 0; snprintf(FX.text, sizeof FX.text, "%s", text); FX.poster[0] = 0; FX.lx = x; FX.ly = y; FX.vx = FX.vy = 0;
@@ -110,7 +111,7 @@ static void fx_draw(void) {
   if (FX.kind == 2) { /* removed: its icon leaves the Library tab and comes down to the card, where it opens into the chip */
     if (t < 0.3f) { float u = t / 0.3f; gfx_ring(lx - 6, 50 - 38 - 6, lw + 12, 76 + 12, 44, 2.5f, col_alpha(ACC2, 0.5f * (1 - u))); fx_icon_at(1 - u, fx_e(t / 0.08f), FX.px, FX.py); return; }
     t -= 0.3f; }
-  float in = fx_e(t / FX_IN), fold = FX.kind == 3 ? fx_e((t - FX_FOLD) / 0.12f) : 0, /* (added: it stays a pill, and flies as one) */ go = FX.kind == 2 || FX.kind == 4 ? fx_e((t - 0.62f) / 0.22f) : 0;
+  float in = fx_e(t / FX_IN), fold = FX.kind == 3 ? fx_e((t - FX_FOLD) / 0.12f) : 0, /* (added: it stays a pill, and flies as one) */ go = FX.kind == 2 || FX.kind == 4 || FX.kind == 5 ? fx_e((t - 0.62f) / 0.22f) : 0;
   float tw = text_width(FX.text, 24, 600, 0.1f), ch = FX.kind == 1 ? 64 : 58, cw = (FX.kind == 1 && FX.poster[0] ? 8 + 35 + 14 + tw + 26 : 58 + tw + 22) * (1 - fold) + ch * fold; /* the chip; folding, it closes down to its round icon */
   if (FX.kind == 1 && t >= FX_FLY) { float u = (t - FX_FLY) / FX_FLYD;
     float land = FX_FLY + FX_FLYD, j = t > land ? t - land : 0; (void)lx; (void)lw;
@@ -137,6 +138,7 @@ static void act(int a) {
     case A_RESTART: close(); app_play_from_start(&it); break;
     case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
     case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
+    case A_CWOUT: sound_play(SND_TOGGLE); fx_start(5, "cw_remove", T("Removed from Continue Watching")); lib_cw_dismiss(&it); close(); app_refresh_boards(); break; /* (the chip says it, then fades where the card was) */
     case A_TRAILER: close(); detail_trailer(it.type, it.id, it.name); break;
     case A_SIMILAR: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_SIM, &p, 0); break; }
     case A_REVIEWS: close(); revpanel_show(&it, 0, M.from[0], M.from[1], M.from[2], M.from[3], M.from[4]); break;
@@ -212,6 +214,7 @@ void cwmenu_show(const Item *it) {
   if (!it->ep) add(A_DETAILS, "info", T("Details"));
   int canMark = strcmp(it->type, "series") || strchr(it->videoId, ':');
   if (canMark) { int w = lib_is_marked_watched(it); add(A_WATCHED, w ? "eyeOff" : "eye", T(w ? "Mark as unwatched" : "Mark as watched")); }
+  if (it->cw && !it->ep) add(A_CWOUT, "cw_remove", T("Remove from Continue Watching")); /* (only from the row itself) */
   if (trailer_available(sb_meta_cached(it->type, it->id), it->id)) add(A_TRAILER, "trailer", T("Trailer"));
   if (!it->ep) add(A_SIMILAR, "similar", T("Watch something similar"));
   if (!it->ep && sb_is_imdb(it->id)) add(A_REVIEWS, "reviews", T("Reviews"));

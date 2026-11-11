@@ -419,6 +419,10 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
   /* Arabic UI: a line with no right-to-left letter at all (an addon's stream name, a Latin title) is laid out left to
      right, as the page does with unicode-bidi: plaintext; otherwise its emoji and numbers jump to the far end */
   if (base == FRIBIDI_PAR_RTL) { int i = 0; while (i < n && !FRIBIDI_IS_RTL(types[i])) i++; if (i == n) base = FRIBIDI_PAR_LTR; }
+  /* and the other way round: in a left to right UI, a line that starts in Arabic (a description in the titles' language,
+     Settings > Language) is laid out right to left, so its full stop and numbers sit where Arabic puts them; it stays on
+     the UI's side */
+  else { int i = 0; while (i < n && !FRIBIDI_IS_STRONG(types[i])) i++; if (i < n && FRIBIDI_IS_RTL(types[i])) base = FRIBIDI_PAR_RTL; }
   fribidi_get_bracket_types((const FriBidiChar *)cps, n, types, brk);
   if (!fribidi_get_par_embedding_levels_ex(types, brk, n, &base, levels)) { for (int i = 0; i < n; i++) levels[i] = 0; }
   /* runs: same level, same font, and (for fallback fonts) one script; a Latin line is one cluster per letter, all Inter */
