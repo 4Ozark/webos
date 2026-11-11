@@ -378,6 +378,7 @@ static void cw_facts(const cJSON *it, double nowMs, CwFacts *f) {
   f->videoIdIsEpisode = *vid && strcmp(vid, js_str(it, "_id", "")) != 0;
   f->timeOffsetMs = js_num(s, "timeOffset", 0); f->durationMs = js_num(s, "duration", 0);
   f->lastWatchedMs = tms(cJSON_GetObjectItemCaseSensitive((cJSON *)s, "lastWatched")); f->nowMs = nowMs;
+  const cJSON *h = cJSON_GetObjectItemCaseSensitive(store_node("cwHidden"), js_str(it, "_id", "")); f->dismissedMs = cJSON_IsNumber(h) ? h->valuedouble : 0;
 }
 int lib_cw_items(ItemList *out) {
   cJSON *lib = lib_arr(); cJSON *picks[256]; int n = 0; const cJSON *it; double nowMs = (double)time(NULL) * 1000;
@@ -392,6 +393,19 @@ int lib_cw_info(const Item *it, CwInfo *out) {
   double to = js_num(s, "timeOffset", 0), d = js_num(s, "duration", 0); if (!(to > 0) || !(d > 0) || to > d * 0.96) return 0;
   const char *vid = js_str(s, "video_id", ""); if (!strcmp(it->type, "series") && !*vid) return 0;
   copy_str(out->vid, sizeof out->vid, *vid ? vid : it->id); out->pct = (float)(to / d); out->leftMin = (float)((d - to) / 60000.0); return 1;
+}
+/* "Remove from Continue Watching": the title leaves the row until something of it is watched again (or its next episode
+   comes out). Kept on this TV ("cwHidden": id -> when); a title part way through is also rewound to the start, as the
+   official apps do, so the row drops it on the account's other devices too. */
+void lib_cw_dismiss(const Item *it) {
+  if (!it || !it->id[0]) return;
+  cJSON *l = lib_get(it->id); const cJSON *s = js_obj(l, "state"); double nowMs = (double)time(NULL) * 1000;
+  double lw = tms(cJSON_GetObjectItemCaseSensitive((cJSON *)s, "lastWatched")), at = lw > nowMs ? lw : nowMs; /* (a clock ahead elsewhere: still hidden) */
+  cJSON *h = store_node("cwHidden"); if (!cJSON_IsObject(h)) { h = cJSON_CreateObject(); store_set_node("cwHidden", h); }
+  for (cJSON *e = h->child; e;) { cJSON *nx = e->next; if (!cJSON_IsNumber(e) || nowMs - e->valuedouble > CW_NEWEP_MAX_AGE_MS) cJSON_Delete(cJSON_DetachItemViaPointer(h, e)); e = nx; } /* old ones go */
+  cJSON_DeleteItemFromObjectCaseSensitive(h, it->id); cJSON_AddNumberToObject(h, it->id, at); store_set_node("cwHidden", h);
+  if (l && s && js_num(s, "timeOffset", 0) > 0) { cJSON *st = cJSON_GetObjectItemCaseSensitive(l, "state"); cJSON_DeleteItemFromObjectCaseSensitive(st, "timeOffset"); cJSON_AddNumberToObject(st, "timeOffset", 0); lib_save(l); }
+  else libVer++;
 }
 /* An episode just finished and the next one is known: the title's state points at the next episode with nothing played
    (offset 0, no duration), so Continue Watching offers it at once, as the official apps do, without the title page
@@ -408,6 +422,46 @@ int lib_set_up_next(const char *id, const Item *it, const char *nextVid) {
   cJSON_DeleteItemFromObjectCaseSensitive(s, "lastWatched"); cJSON_AddStringToObject(s, "lastWatched", iso);
   lib_save(l); return 1;
 }
+/* New episodes (core/cwlogic.c has the rules): the series whose last watched episode was the last one out are looked at
+   again, at most every 6 hours (their metadata from the addons, kept 12 hours on disk); one whose next episode is out now
+   is put up next, so it comes back to Continue Watching on its own. found() is called once if any was. */
+#define NEWEP_EVERY_MS (6.0 * 3600 * 1000)
+#define NEWEP_MAX 40
+static double newEpAt; static int newEpBusy, newEpFound; static void (*newEpCb)(void);
+static void newep_done(void) { if (--newEpBusy > 0) return; if (newEpFound && newEpCb) newEpCb(); newEpFound = 0; }
+static void on_newep_meta(cJSON *m, void *ud) {
+  char *id = ud; cJSON *l = lib_get(id); const cJSON *videos = js_arr(m, "videos"); int n = cJSON_GetArraySize(videos);
+  if (l && n > 0 && n <= 4096) {
+    const char *cur = js_str(js_obj(l, "state"), "video_id", ""); CwEp *eps = calloc((size_t)n, sizeof *eps); int *flags = calloc((size_t)n, sizeof *flags);
+    if (eps && flags) {
+      lib_ep_watched_map(l, videos, flags); int k = 0, ci = -1; const cJSON *v;
+      cJSON_ArrayForEach(v, videos) {
+        eps[k].season = (int)js_numstr(v, "season", -1); eps[k].episode = (int)js_numstr(v, "episode", -1); eps[k].watched = flags[k];
+        const char *rel = js_str(v, "released", js_str(v, "firstAired", NULL)); if (rel && *rel) { cJSON tmp; memset(&tmp, 0, sizeof tmp); tmp.type = cJSON_String; tmp.valuestring = (char *)rel; eps[k].releasedMs = tms(&tmp); }
+        if (eps[k].season < 0 || eps[k].episode < 0) eps[k].season = 0; /* (no numbers: kept out, as a special) */
+        if (!strcmp(js_str(v, "id", ""), cur)) ci = k;
+        k++; }
+      double lw = tms(cJSON_GetObjectItemCaseSensitive(js_obj(l, "state"), "lastWatched"));
+      int nx = cw_next_aired(eps, n, ci, lw, (double)time(NULL) * 1000);
+      if (nx >= 0) { const cJSON *nv = cJSON_GetArrayItem(videos, nx); const char *vid = js_str(nv, "id", ""); if (*vid && lib_set_up_next(id, NULL, vid)) newEpFound = 1; } }
+    free(eps); free(flags); }
+  free(id); newep_done();
+}
+static int cmp_last_watched(const void *a, const void *b) {
+  double x = tms(cJSON_GetObjectItemCaseSensitive(js_obj(*(cJSON **)a, "state"), "lastWatched")), y = tms(cJSON_GetObjectItemCaseSensitive(js_obj(*(cJSON **)b, "state"), "lastWatched"));
+  return x < y ? 1 : x > y ? -1 : 0; }
+void lib_new_episodes_scan(void (*found)(void)) {
+  double nowMs = (double)time(NULL) * 1000; if (newEpBusy && nowMs - newEpAt < 600000) return; /* (an answer that never came frees it after 10 min) */
+  if (newEpAt && nowMs - newEpAt < NEWEP_EVERY_MS) return;
+  cJSON *lib = lib_arr(); cJSON *picks[256]; int n = 0; const cJSON *it;
+  cJSON_ArrayForEach(it, lib) { CwFacts f; cw_facts(it, nowMs, &f); if (cw_newep_candidate(&f) && n < 256) picks[n++] = (cJSON *)it; }
+  qsort(picks, n, sizeof picks[0], cmp_last_watched); if (n > NEWEP_MAX) n = NEWEP_MAX; /* the most recently watched ones */
+  newEpAt = nowMs; newEpCb = found; newEpFound = 0; if (!n) return;
+  newEpBusy = n + 1; /* (held until every request is out: an answer from memory comes back at once) */
+  for (int i = 0; i < n; i++) { const char *id = js_str(picks[i], "_id", ""); char *c = strdup(id); if (!c) { newEpBusy--; continue; } sb_meta("series", id, on_newep_meta, c); }
+  newep_done();
+}
+
 static char progId[64]; static Uint32 progPushT;
 void lib_set_progress(const char *id, const Item *it, const char *vid, double to, double dur, int force) {
   cJSON *l = lib_get(id); if (!l) l = lib_new_item(it); cJSON *s = cJSON_GetObjectItemCaseSensitive(l, "state"); if (!s) { s = cJSON_CreateObject(); cJSON_AddItemToObject(l, "state", s); }

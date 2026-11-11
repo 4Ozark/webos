@@ -1,6 +1,7 @@
 #include "core/sync.h"
 #include "core/app.h"
 #include "core/i18n.h"
+#include "core/stremio.h"
 #include "screens/board.h"
 #include "screens/player.h"
 #include "platform/plat.h"
@@ -18,7 +19,9 @@ static int SDLCALL on_event(void *ud, SDL_Event *e) {
 }
 /* a pull that changed the library: applied in a pause of the remote (a rebuild in the middle of a move is a
    hitch), at most 5 s later */
-static void on_lib(int changed, void *ud) { (void)ud; if (!changed) return; board_invalidate(); if (!rebuildWanted) { rebuildWanted = 1; rebuildSince = app_now(); } }
+static void lib_changed(void) { board_invalidate(); if (!rebuildWanted) { rebuildWanted = 1; rebuildSince = app_now(); } }
+/* after each pull (the library as the account has it): the series waiting for a new episode are looked at (every 6 h at most) */
+static void on_lib(int changed, void *ud) { (void)ud; lib_new_episodes_scan(lib_changed); if (changed) lib_changed(); }
 static void on_addons(int changed, void *ud) {
   (void)ud; if (!changed) return;
   toast(T("Addons updated"), 2600, NULL);

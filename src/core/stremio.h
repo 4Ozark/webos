@@ -74,6 +74,8 @@ int  lib_cw_items(ItemList *out);       /* Continue Watching, newest first (a se
 /* an episode finished and the next one is known: the title's state points at it (offset 0) so it shows in Continue
    Watching at once. 1: changed (and sent to the account once); 0: nothing to do or already so */
 int  lib_set_up_next(const char *id, const Item *it, const char *nextVid);
+void lib_cw_dismiss(const Item *it);    /* "Remove from Continue Watching": out of the row until it is watched again */
+void lib_new_episodes_scan(void (*found)(void)); /* series with a new episode out go back to Continue Watching (every 6 h at most) */
 typedef struct { char vid[80]; float pct, leftMin; } CwInfo;
 int  lib_cw_info(const Item *it, CwInfo *out);
 int  lib_item_watched(const Item *it);  /* the badge */

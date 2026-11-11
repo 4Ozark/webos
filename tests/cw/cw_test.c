@@ -40,6 +40,38 @@ int main(void) {
   f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.timeOffsetMs = 90000; f.durationMs = 1500000; f.lastWatchedMs = NOW; EXPECT("next episode started", cw_up_next(&f), 0);
   EXPECT("next episode started shows", cw_visible(&f), 1);
 
+  /* Remove from Continue Watching: hidden until something newer is watched */
+  f = base(); f.timeOffsetMs = 60000; f.durationMs = 1200000; f.lastWatchedMs = NOW - 5000; f.dismissedMs = NOW - 1000; EXPECT("removed from the row", cw_visible(&f), 0);
+  f = base(); f.timeOffsetMs = 60000; f.durationMs = 1200000; f.lastWatchedMs = NOW - 500; f.dismissedMs = NOW - 1000; EXPECT("watched again after removing: back", cw_visible(&f), 1);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.lastWatchedMs = NOW - 5000; f.dismissedMs = NOW - 1000; EXPECT("up next removed", cw_visible(&f), 0);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.lastWatchedMs = 0; f.timeOffsetMs = 60000; f.durationMs = 1200000; f.dismissedMs = NOW - 1000; EXPECT("removed, no date", cw_visible(&f), 0);
+
+  /* new episodes: which titles are looked at */
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - 200 * DAY; EXPECT("season finished 200 days ago: looked at", cw_newep_candidate(&f), 1);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - 800 * DAY; EXPECT("over two years: not", cw_newep_candidate(&f), 0);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - DAY; f.removed = 1; EXPECT("removed from the Library: not", cw_newep_candidate(&f), 0);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - DAY; f.removed = 1; f.temp = 1; EXPECT("only played (temp): looked at", cw_newep_candidate(&f), 1);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.lastWatchedMs = NOW - DAY; EXPECT("already up next: not", cw_newep_candidate(&f), 0);
+  f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.timeOffsetMs = 60000; f.durationMs = 1200000; f.lastWatchedMs = NOW - DAY; EXPECT("part way through: not", cw_newep_candidate(&f), 0);
+  f = base(); f.videoIdIsEpisode = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - DAY; EXPECT("a film: not", cw_newep_candidate(&f), 0);
+  f = base(); f.isSeries = 1; f.durationMs = 1200000; f.lastWatchedMs = NOW - DAY; EXPECT("no episode in the state: not", cw_newep_candidate(&f), 0);
+
+  /* new episodes: which episode */
+  { CwEp e[] = { { 1, 1, NOW - 400 * DAY, 1 }, { 1, 2, NOW - 393 * DAY, 1 }, { 2, 1, NOW - 2 * DAY, 0 }, { 2, 2, NOW + 5 * DAY, 0 }, { 0, 1, NOW - 100 * DAY, 0 } };
+    double LW = NOW - 390 * DAY; /* season 1 finished then */
+    EXPECT("season 2 is out: its first episode", cw_next_aired(e, 5, 1, LW, NOW), 2);
+    EXPECT("from an episode not watched: none", cw_next_aired(e, 5, 2, LW, NOW), -1);
+    EXPECT("not out yet", cw_next_aired(e, 5, 1, LW, NOW - 3 * DAY), -1);
+    EXPECT("out before the last watch (a series left): none", cw_next_aired(e, 5, 1, NOW - DAY, NOW), -1);
+    EXPECT("from a special: none", cw_next_aired(e, 5, 4, LW, NOW), -1);
+    EXPECT("a bad index", cw_next_aired(e, 5, 9, LW, NOW), -1); }
+  { CwEp e[] = { { 2, 1, NOW - 2 * DAY, 1 }, { 1, 2, NOW - 393 * DAY, 1 }, { 1, 1, NOW - 400 * DAY, 1 } }; /* (any order in the meta) */
+    EXPECT("the last one out, all watched: none", cw_next_aired(e, 3, 1, NOW - 30 * DAY, NOW), -1); }
+  { CwEp e[] = { { 1, 2, NOW - 393 * DAY, 1 }, { 2, 2, NOW - DAY, 0 }, { 2, 1, NOW - 8 * DAY, 1 }, { 1, 1, NOW - 400 * DAY, 1 } };
+    EXPECT("watched elsewhere already: the one after it", cw_next_aired(e, 4, 0, NOW - 7 * DAY, NOW), 1); }
+  { CwEp e[] = { { 1, 1, NOW - 400 * DAY, 1 }, { 2, 1, 0, 0 } };
+    EXPECT("no date: none", cw_next_aired(e, 2, 0, NOW - 390 * DAY, NOW), -1); }
+
   /* leaving near the end counts as watched */
   EXPECT("100 s left of 45 min", cw_near_end(2700, 2600, 0, 0), 1);
   EXPECT("101 s left is not yet", cw_near_end(2700, 2599, 0, 0), 0);

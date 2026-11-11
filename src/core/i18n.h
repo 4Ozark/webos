@@ -4,6 +4,9 @@
 #define SB_I18N_H
 int  i18n_init(const char *assetDir, const char *lang);  /* lang: "auto", "en", "ar", "fr"... */
 const char *i18n_lang(void);
+/* the language of titles, descriptions and episode names (TMDB): the "contentLang" setting, or the app's own language
+   ("app", the default). The app can be in English with the titles in Arabic, or the other way round. */
+const char *i18n_content_lang(void);
 const char *i18n_tv_lang(void);  /* the TV's own UI language, two letters ("fr") */
 int  i18n_rtl(void);
 unsigned i18n_gen(void);         /* bumps with every language change: strings kept by screens are made again */

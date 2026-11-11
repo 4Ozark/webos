@@ -76,6 +76,13 @@ int i18n_init(const char *assetDir, const char *want) {
   return 1;
 }
 const char *i18n_lang(void) { return lang; }
+const char *i18n_content_lang(void) { /* asked for every card in every frame: read again only when the settings or the language move */
+  static unsigned ser, lg; static int have; static char c[8];
+  if (have && ser == store_serial() && lg == langGen) return c;
+  have = 1; ser = store_serial(); lg = langGen; const char *v = store_get("contentLang", "app");
+  snprintf(c, sizeof c, "%s", v && (!strcmp(v, "en") || known(v)) ? v : lang);
+  return c;
+}
 int i18n_rtl(void) { return rtl; }
 const char *T(const char *en) {
   if (!idx || !en) return en;
