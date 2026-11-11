@@ -23,7 +23,7 @@ int main(void) {
   /* Font: "auto" is the app's own, as before; unknown values fall back to it */
   EXPECT_I("auto is index 0", subfont_index("auto"), 0); EXPECT_I("no value is auto", subfont_index(NULL), 0); EXPECT_I("junk is auto", subfont_index("comic"), 0);
   EXPECT_I("auto has no file", subfont_at(0)->file == NULL, 1);
-  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans", "arimo", "almarai", "amiri", "lato", "vazirmatn", "plexar", "naskh", "kufi" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
+  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans", "arimo", "almarai", "amiri", "lato", "vazirmatn", "plexar", "naskh", "kufi", "lgui", "lguib", "droidn", "droidk" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
   EXPECT_I("bad font index is auto", subfont_at(77)->file == NULL, 1);
   for (int i = 1; i < SUBFONT_N; i++) { EXPECT_I("a font has a file", subfont_at(i)->file != NULL && subfont_at(i)->family != NULL, 1); EXPECT_I("a font covers some script", subfont_at(i)->latin || subfont_at(i)->arabic, 1); }
   /* which styled (ASS) tracks take the chosen font: only where it covers the track's script */
@@ -36,6 +36,11 @@ int main(void) {
   EXPECT_S("Noto Sans Arabic on an Arabic track", subfont_for_track("noto", "ar-SA")->family, "Noto Sans Arabic");
   EXPECT_S("unknown language counts as Latin", subfont_for_track("opensans", "")->family, "Open Sans"); EXPECT_S("no language counts as Latin", subfont_for_track("opensans", NULL)->family, "Open Sans");
   EXPECT_I("Urdu is Arabic script", subfont_arabic_lang("urd") || subfont_arabic_lang("ur"), 1); EXPECT_I("English is not", subfont_arabic_lang("eng"), 0);
+  /* the TV's own fonts: a path of the TV's, found only when the file is there */
+  { char out[600]; EXPECT_I("a bundled font is found under the assets", subfont_path(subfont_at(subfont_index("cairo")), "assets", out, sizeof out), 1); EXPECT_S("its path", out, "assets/fonts/Cairo.ttf");
+    EXPECT_I("a TV font the host does not have is skipped", subfont_path(subfont_at(subfont_index("lgui")), "assets", out, sizeof out), 0); EXPECT_S("and leaves no path", out, "");
+    EXPECT_I("auto has no file", subfont_path(subfont_at(0), "assets", out, sizeof out), 0);
+    EXPECT_S("LG Smart UI family", subfont_at(subfont_index("lgui"))->family, "LG Smart UI AR HE TH"); EXPECT_I("a TV font starts at the root", subfont_at(subfont_index("droidn"))->file[0] == '/', 1); }
   /* brightness */
   EXPECT_I("default dim index", subdim_index(NULL) == SUBDIM_DEFAULT && subdim_index("") == 0 && subdim_index("junk") == 0 && subdim_index("9") == 0, 1);
   for (int i = 0; i < SUBDIM_N; i++) EXPECT_I("dim round trip", subdim_index(subdim_value(i)), i);

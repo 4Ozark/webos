@@ -281,12 +281,12 @@ static const int SUB_SIZES[] = { 72, 80, 100, 120, 140, 160, 180 };
 static int sub_face_id(void) {
   static unsigned ser; static int id; if (ser == store_serial() && ser) return id; ser = store_serial(); id = 0;
   const SubFont *f = subfont_at(subfont_index(store_get("subsFont", "auto")));
-  if (f->file) { char p[640]; snprintf(p, sizeof p, "%s/fonts/%s", plat_asset_dir(), f->file); id = text_face_register(p); }
+  { char p[640]; if (subfont_path(f, plat_asset_dir(), p, sizeof p)) id = text_face_register(p); }
   return id;
 }
 static void sub_ass_font(const char *lang, char *path, size_t pcap, char *fam, size_t fcap) { /* "" when the app's own font stays */
   const SubFont *f = subfont_for_track(store_get("subsFont", "auto"), lang); path[0] = fam[0] = 0; if (!f) return;
-  snprintf(path, pcap, "%s/fonts/%s", plat_asset_dir(), f->file); snprintf(fam, fcap, "%s", f->family);
+  if (!subfont_path(f, plat_asset_dir(), path, pcap)) return; snprintf(fam, fcap, "%s", f->family);
 }
 /* Position: where the lines sit (core/subprefs.c), in layout units, + raises. The default is where they always sat. */
 static int dim_idx(void) { return subdim_index(store_get("subsDim", "0")); }

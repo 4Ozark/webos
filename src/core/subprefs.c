@@ -1,5 +1,6 @@
 #include "core/subprefs.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 
@@ -33,6 +34,11 @@ static const SubFont FONTS[SUBFONT_N] = {
   { "plexar",   "IBM Plex Arabic",  "IBMPlexSansArabic-Medium.ttf", "IBM Plex Sans Arabic", 1, 1 },
   { "naskh",    "Noto Naskh",       "NotoNaskhArabic.ttf", "Noto Naskh Arabic", 1, 1 },
   { "kufi",     "Noto Kufi",        "NotoKufiArabic.ttf", "Noto Kufi Arabic", 1, 1 },
+  /* the LG TV's own Arabic fonts (what the original Stremio app draws with): read from the TV, nothing bundled */
+  { "lgui",     "LG Smart UI (TV)",        "/usr/share/fonts/LG_Smart_UI_AR_HE_TH-Regular.ttf",  "LG Smart UI AR HE TH", 1, 1 },
+  { "lguib",    "LG Smart UI Bold (TV)",   "/usr/share/fonts/LG_Smart_UI_AR_HE_TH-SemiBold.ttf", "LG Smart UI AR HE TH", 1, 1 },
+  { "droidn",   "Droid Naskh (TV)",        "/usr/share/fonts/DroidNaskh-Regular.ttf",            "Droid Arabic Naskh",   1, 1 },
+  { "droidk",   "Droid Kufi (TV)",         "/usr/share/fonts/DroidKufi-Regular.ttf",             "Droid Arabic Kufi",    1, 1 },
 };
 int subfont_index(const char *stored) {
   if (!stored || !*stored) return 0;
@@ -64,4 +70,12 @@ unsigned subdim_rgb(unsigned rgb, int idx) {
   float s = subdim_scale(idx); if (s >= 1.0f) return rgb;
   unsigned r = (unsigned)(((rgb >> 16) & 255) * s + 0.5f), g = (unsigned)(((rgb >> 8) & 255) * s + 0.5f), b = (unsigned)((rgb & 255) * s + 0.5f);
   return (rgb & 0xff000000u) | (r << 16) | (g << 8) | b;
+}
+
+int subfont_path(const SubFont *f, const char *assetDir, char *out, size_t cap) {
+  if (!out || !cap) return 0;
+  out[0] = 0;
+  if (!f || !f->file) return 0;
+  if (f->file[0] == '/') snprintf(out, cap, "%s", f->file); else snprintf(out, cap, "%s/fonts/%s", assetDir ? assetDir : ".", f->file);
+  FILE *fp = fopen(out, "rb"); if (!fp) { out[0] = 0; return 0; } fclose(fp); return 1;
 }
