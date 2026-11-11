@@ -53,13 +53,13 @@ static const Opt SIZES[] = { { "0", "72%" }, { "1", "80%" }, { "2", "100%" }, { 
 static const Opt COLORS[] = { { "#ffffff", "White" }, { "#ffe600", "Yellow" }, { "#00e5ff", "Cyan" } };
 static const Opt OUTL[] = { { "#000000", "Black" }, { "#ffffff", "White" } };
 static const Opt BGS[] = { { "0", "None" }, { "1", "Solid" }, { ".6", "Transparent" } };
-static Opt posOpts[SUBPOS_N], fontOpts[SUBFONT_N]; /* filled in build() from core/subprefs.c */
+static Opt posOpts[SUBPOS_N], fontOpts[SUBFONT_N], dimOpts[SUBDIM_N]; /* filled in build() from core/subprefs.c */
 static const Opt ASSO[] = { { "styled", "Styled" }, { "plain", "Plain" } };
 static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" }, { "5", "5 min" }, { "10", "10 min" } };
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 9
 #define MAXROWS 48
-static Setting playBase[8], playS[8], subsS[8], audS[5], lookS[2], langS[2], keyS[4], addonS[40], acctS[1], supS[6];
+static Setting playBase[8], playS[8], subsS[9], audS[5], lookS[2], langS[2], keyS[4], addonS[40], acctS[1], supS[6];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -175,9 +175,11 @@ static void build(void) {
   for (int i = 0; i < SUBFONT_N; i++) { fontOpts[i].v = subfont_at(i)->id; fontOpts[i].lb = subfont_at(i)->label; }
   set_s(&subsS[3], "subsFont", "Font", "The font of the subtitle lines. Styled (ASS) subtitles keep the fonts they ask for", fontOpts, SUBFONT_N, "auto");
   set_s(&subsS[4], "subsColor", "Colour", "", COLORS, 3, "#ffffff");
-  set_s(&subsS[5], "subsOutlineColor", "Outline", "", OUTL, 2, "#000000");
-  set_s(&subsS[6], "subsBgStyle", "Background", "", BGS, 3, "0");
-  set_s(&subsS[7], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
+  for (int i = 0; i < SUBDIM_N; i++) { dimOpts[i].v = subdim_value(i); dimOpts[i].lb = subdim_label(i); }
+  set_s(&subsS[5], "subsDim", "Brightness", "How strongly the subtitle colour shows: Dim 1 to 3 soften it, for a white that is too bright", dimOpts, SUBDIM_N, subdim_value(SUBDIM_DEFAULT));
+  set_s(&subsS[6], "subsOutlineColor", "Outline", "", OUTL, 2, "#000000");
+  set_s(&subsS[7], "subsBgStyle", "Background", "", BGS, 3, "0");
+  set_s(&subsS[8], "subsAssStyle", "Styled subtitles", "Signs, fonts and effects as the film\xe2\x80\x99s own ASS / SSA subtitles draw them", ASSO, 2, "styled");
   set_s(&audS[0], "enableDefaultAudioTrack", "Auto audio track", "Pick the audio language below when a film has several", OO, 2, "false");
   set_s(&audS[1], "defaultAudioTrack", "Default audio language", "", LANG_OPTS + 1, 17, "eng");
   set_s(&audS[2], "dtsMode", "DTS sound", "Auto finds out what this TV plays. Convert if you are not sure. Off leaves it to the TV", DTSM, 3, "auto");
@@ -198,7 +200,7 @@ static void build(void) {
   /* grouped by task: what you watch, what the screens look like, account and system; Log out on its own, last */
   Cat c[NCAT] = {
     { "Watch", "Playback", "set_play", "Seek step, next episode, picture size", NULL, playS, 6, 0 }, /* (the count: play_layout) */
-    { "Watch", "Subtitles", "set_subs", "Language, size, colour, background", "subs", subsS, 8, 0 },
+    { "Watch", "Subtitles", "set_subs", "Language, size, colour, background", "subs", subsS, 9, 0 },
     { "Watch", "Audio", "set_aud", "Default audio language, DTS, interface sounds", NULL, audS, 5, 0 },
     { "Screens", "Appearance", "set_look", "Accent colour", "look", lookS, 2, 0 },
     { "Screens", "Language", "set_lang", "The language of the app", NULL, langS, nl, 0 },
@@ -477,8 +479,8 @@ static void preview_subs(float x, float y, float w, float h) {
     gfx_image(bt, x, y, w, h, 18, WHITE_A(255), u0 + du + px, v0 + dv, u1 - du + px, v1 - dv); } else gfx_rrect(x, y, w, h, 18, RGB(0x1c, 0x1a, 0x24));
   gfx_rrect(x, y, w, h, 18, col_alpha(PAGE, 0.25f));
   int sz = atoi(store_get("subtitleSize", "2")); static const int SZ[] = { 72, 80, 100, 120, 140, 160, 180 }; if (sz < 0 || sz > 6) sz = 2; int px = (int)(34 * SZ[sz] / 100.0f + 0.5f);
-  uint32_t col = hexcol(store_get("subsColor", "#ffffff")), ol = hexcol(store_get("subsOutlineColor", "#000000")); float bo = (float)atof(store_get("subsBgStyle", "0"));
-  int pi = subpos_index(store_get("subsPos", "0")), fi = subfont_index(store_get("subsFont", "auto")); unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000) ^ ((unsigned)pi * 40503u) ^ ((unsigned)fi * 69069u);
+  int di = subdim_index(store_get("subsDim", "0")); uint32_t col = subdim_rgb(hexcol(store_get("subsColor", "#ffffff")), di), ol = hexcol(store_get("subsOutlineColor", "#000000")); float bo = (float)atof(store_get("subsBgStyle", "0"));
+  int pi = subpos_index(store_get("subsPos", "0")), fi = subfont_index(store_get("subsFont", "auto")); unsigned sig = (unsigned)px * 2654435761u ^ col ^ (ol << 1) ^ (unsigned)(bo * 1000) ^ ((unsigned)pi * 40503u) ^ ((unsigned)fi * 69069u) ^ ((unsigned)di * 2246822519u);
   int fid = 0; { const SubFont *sf = subfont_at(fi); if (sf->file) { char fp[640]; snprintf(fp, sizeof fp, "%s/fonts/%s", plat_asset_dir(), sf->file); fid = text_face_register(fp); } } /* the line is drawn in the font the player will use */ if (sig != subSig) { if (subSig) { subAt = app_now(); orbs_push(&subOrbs, ORB_DONE, 0.5f); } subSig = sig; }
   orbs_step(&subOrbs, app_dt(), 1, 1, 2.6f); orbs_draw_in(&subOrbs, 0.5f, x, y, w, h, 18); /* the app's glows, over the picture, inside its corners */
   gfx_rrect_v(x, y, w, h, 18, BLACK_A(0), BLACK_A(170)); /* the player's shade at the foot */

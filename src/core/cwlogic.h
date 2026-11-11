@@ -23,4 +23,10 @@ int cw_up_next(const CwFacts *f);
 /* whether the title is in the Continue Watching row: part way through (up to 96 %), or up next */
 int cw_visible(const CwFacts *f);
 
+/* leaving an episode (or film) this close to its end counts as having watched it: the last minute or so is credits or an ad.
+   True within CW_NEAR_END_S of the end, or from the credits' own start when the skip data gives it (outroHas, outroStartS: only
+   believed past the half way mark). Short things (under 10 minutes) and the first minute never count. */
+#define CW_NEAR_END_S 100.0
+int cw_near_end(double durationS, double timeS, int outroHas, double outroStartS);
+
 #endif

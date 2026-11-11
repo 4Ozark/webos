@@ -4,5 +4,12 @@
  "Default": "افتراضي",
  "Font": "الخط",
  "Where the lines sit: +1 to +5 raise them, Low sets them a little under the usual place": "مكان أسطر الترجمة: ‎+1 إلى ‎+5 ترفعها، و«منخفض» ينزّلها قليلًا عن المكان المعتاد",
- "The font of the subtitle lines. Styled (ASS) subtitles keep the fonts they ask for": "خط أسطر الترجمة. الترجمات المنمّقة (ASS) تحتفظ بالخطوط التي تطلبها"
+ "The font of the subtitle lines. Styled (ASS) subtitles keep the fonts they ask for": "خط أسطر الترجمة. الترجمات المنمّقة (ASS) تحتفظ بالخطوط التي تطلبها",
+ "Brightness": "السطوع",
+ "Normal": "عادي",
+ "Dim 1": "خافت 1",
+ "Dim 2": "خافت 2",
+ "Dim 3": "خافت 3",
+ "How strongly the subtitle colour shows: Dim 1 to 3 soften it, for a white that is too bright": "شدّة لون الترجمة: «خافت 1» إلى «خافت 3» تخفّف الأبيض الساطع",
+ "Press Back again to exit": "اضغط رجوع مرة ثانية للخروج"
 }
