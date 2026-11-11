@@ -10,3 +10,4 @@ The app itself is GPL-3.0.
 
 Bundled subtitle fonts (assets/fonts), all SIL Open Font License 1.1, licence texts beside the fonts:
 Cairo (CAIRO-LICENSE.txt), Tajawal (TAJAWAL-LICENSE.txt), Roboto (ROBOTO-LICENSE.txt), Open Sans (OPENSANS-LICENSE.txt).
+Also (SIL OFL 1.1): Arimo, Almarai, Amiri, Lato, Vazirmatn, IBM Plex Sans Arabic, Noto Naskh Arabic, Noto Kufi Arabic (ARIMO-, ALMARAI-, AMIRI-, LATO-, VAZIRMATN-, IBMPLEXARABIC-, NOTONASKH-, NOTOKUFI-LICENSE.txt in assets/fonts).

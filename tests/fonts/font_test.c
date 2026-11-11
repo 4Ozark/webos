@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
   const char *dir = argc > 1 ? argv[1] : "assets/fonts"; FT_Library ft; if (FT_Init_FreeType(&ft)) { printf("FreeType would not start\n"); return 2; }
   const char *latin = "I came back to tell you something. 0123456789 ?!", *arabic = "عدتُ لأخبرك بشيء. هذا اختبار للترجمة ١٢٣";
   for (int i = 1; i < SUBFONT_N; i++) {
-    const SubFont *sf = subfont_at(i); char path[512]; snprintf(path, sizeof path, "%s/%s", dir, sf->file); long n = 0; unsigned char *d = slurp(path, &n);
+    const SubFont *sf = subfont_at(i); if (sf->file[0] == '/') { printf("%-9s the TV's own font: not bundled, not checked here\n", sf->id); continue; } char path[512]; snprintf(path, sizeof path, "%s/%s", dir, sf->file); long n = 0; unsigned char *d = slurp(path, &n);
     CHECK(d != NULL, "%s: file missing", path); if (!d) continue;
     FT_Face face; int err = FT_New_Memory_Face(ft, d, n, 0, &face); CHECK(!err, "%s: FreeType refused it (%d)", sf->id, err); if (err) continue;
     CHECK(!strcmp(face->family_name, sf->family) || strstr(face->family_name, sf->family), "%s: family is '%s', the table says '%s'", sf->id, face->family_name, sf->family);
