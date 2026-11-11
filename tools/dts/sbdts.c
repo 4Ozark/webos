@@ -30,7 +30,6 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/avstring.h>
 #include <libavutil/dovi_meta.h>
-#include "webrtc/common_audio/vad/include/webrtc_vad.h" /* third_party/webrtcvad (Auto-sync's voice detector) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -478,116 +477,7 @@ static int sbd_run(SbdSrc *s, int seg, double from, sbd_write w, void *ud, volat
   return r;
 }
 static void sbd_close(SbdSrc *s) { if (s) src_free(s); }
-
-/* ---- where someone speaks (Auto-sync) ----
-   The app hands the TV's decoder the sound itself, so it has none to listen to; this reads the file a second time for a
-   few minutes around the playhead and decodes one audio track here. A track with a centre channel is listened to there
-   alone (films put the dialogue in it, the music and effects around it); anything else is mixed down to mono. 8 kHz is
-   what the detector works at anyway. Each 10 ms goes to WebRTC's voice activity detector (its most selective mode:
-   music and noise said to be speech cost more than a quiet line missed). Even so it takes steady music for speech
-   most of the time; speech comes in syllables, so a window is kept only when its loudness swings by 12 dB or more
-   within the 400 ms around it (measured on test mixes: speech kept 0.8 of the time, music and noise 0.02 instead of
-   0.6). The windows are placed by the frames' own timestamps, so a gap or a jump in the sound leaves zeros where it
-   is, never shifts what follows. */
-void rtc_FatalMessage(const char *file, int line, const char *msg) { (void)file; (void)line; (void)msg; abort(); } /* (the detector's checks: never reached with the sizes used here) */
-#define VAD_RATE 8000
-#define VAD_WIN 80                       /* 10 ms at 8 kHz */
-#define SWING_W 40                       /* the syllable check: 400 ms... */
-#define SWING_DB 12.0f                   /* ...and the swing in loudness speech has there */
-static int sbd_speech(sbd_read rd, void *ud, long long size, int audioOrd, double from, double dur, long long maxBytes,
-                      unsigned char *out, int cap, volatile int *stop, char *err, int errn) {
-  if (!out || cap <= 0) { snprintf(err, errn, "nowhere to write"); return -1; }
-  memset(out, 0, (size_t)cap); if (from < 0) from = 0;
-  int want = (int)(dur * 100); if (want > cap) want = cap;
-  SbdSrc *s = calloc(1, sizeof *s); if (!s) { snprintf(err, errn, "out of memory"); return -1; }
-  s->rd = rd; s->ud = ud; s->size = size; s->stop = stop; s->next = -1; s->vi = s->ai = -1; av_log_set_level(getenv("SB_DTS_AVLOG") ? AV_LOG_WARNING : AV_LOG_FATAL);
-  VadInst *vad = NULL; int16_t *pcm = NULL; float *db = NULL; int r, ret = -1, top = 0; AVChannelLayout inL = { 0 };
-  unsigned char *b = av_malloc(IOBUF);
-  s->io = b ? avio_alloc_context(b, IOBUF, 0, s, io_read, NULL, io_seek) : NULL; s->ic = avformat_alloc_context();
-  if (!s->io || !s->ic) { av_free(b); snprintf(err, errn, "out of memory"); goto done; }
-  s->ic->pb = s->io; s->ic->flags |= AVFMT_FLAG_CUSTOM_IO; s->ic->interrupt_callback.callback = interrupted; s->ic->interrupt_callback.opaque = s;
-  if ((r = avformat_open_input(&s->ic, NULL, NULL, NULL)) < 0) { say(err, errn, "not a file this reads", r); goto done; }
-  for (unsigned i = 0, na = 0; i < s->ic->nb_streams; i++) { AVCodecParameters *p = s->ic->streams[i]->codecpar;
-    if (p->codec_type == AVMEDIA_TYPE_VIDEO && s->vi < 0 && !(s->ic->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC)) s->vi = (int)i;
-    if (p->codec_type == AVMEDIA_TYPE_AUDIO) { if (audioOrd >= 0 && (int)na == audioOrd) s->ai = (int)i; na++; } }
-  if (s->ai < 0) s->ai = av_find_best_stream(s->ic, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
-  if (s->ai < 0) { snprintf(err, errn, "no audio track"); goto done; }
-  if (s->vi < 0) s->vi = s->ai; /* (the stream the seeks go by) */
-  AVStream *A = s->ic->streams[s->ai]; s->vtb = s->ic->streams[s->vi]->time_base; s->atb = A->time_base;
-  s->info.dur = s->ic->duration > 0 ? s->ic->duration / (double)AV_TIME_BASE : 0;
-  const AVCodec *dc = avcodec_find_decoder(A->codecpar->codec_id);
-  if (!dc) { snprintf(err, errn, "no decoder for %s", avcodec_get_name(A->codecpar->codec_id)); goto done; }
-  s->dec = avcodec_alloc_context3(dc); if (!s->dec) { snprintf(err, errn, "out of memory"); goto done; }
-  avcodec_parameters_to_context(s->dec, A->codecpar); s->dec->pkt_timebase = s->atb;
-  { AVDictionary *o = NULL; if (A->codecpar->codec_id == AV_CODEC_ID_DTS) av_dict_set(&o, "core_only", "1", 0);
-    r = avcodec_open2(s->dec, dc, &o); av_dict_free(&o); if (r < 0) { say(err, errn, "sound decoder", r); goto done; } }
-  /* to the moment asked for: the index when the file has one (12 MiB of reads at most to find it), else straight to
-     the nearest Matroska cluster */
-  if (from > 1) { s->readCnt = 0; s->budget = 12 << 20;
-    r = av_seek_frame(s->ic, -1, (int64_t)(from * AV_TIME_BASE), AVSEEK_FLAG_BACKWARD); int over = s->readCnt > s->budget; s->budget = 0;
-    if (r < 0 || over) { s->io->eof_reached = 0; s->io->error = 0;
-      if (s->info.dur <= 0 && s->size > 0) { long long p; double t; /* (no duration in the head either: guessed from a cluster half way, for locate's first step) */
-        if (!find_cluster(s, s->size / 2, &p, &t) && t > 0 && p > 0) s->info.dur = t * (double)s->size / (double)p; }
-      if (strcmp(s->ic->iformat->name, "matroska,webm") || locate(s, from) < 0) { snprintf(err, errn, "can't find %.0f s in the file", from); goto done; } } }
-  /* (the other tracks are left out only now: a seek with no index walks the clusters until the picture's next keyframe,
-     which it would never meet with the picture discarded) */
-  for (unsigned i = 0; i < s->ic->nb_streams; i++) if ((int)i != s->ai) s->ic->streams[i]->discard = AVDISCARD_ALL;
-  s->readCnt = 0; s->budget = maxBytes > 0 ? maxBytes : 0;
-  if (!(vad = WebRtcVad_Create()) || WebRtcVad_Init(vad) || WebRtcVad_set_mode(vad, 3)) { snprintf(err, errn, "voice detector"); goto done; }
-  s->fr = av_frame_alloc(); s->pk = av_packet_alloc(); int pcap = VAD_RATE; pcm = malloc((size_t)pcap * sizeof *pcm); db = malloc((size_t)want * sizeof *db);
-  if (!s->fr || !s->pk || !pcm || !db) { snprintf(err, errn, "out of memory"); goto done; }
-  AVChannelLayout mono = AV_CHANNEL_LAYOUT_MONO; int inRate = 0, inFmt = -1;
-  long long next = -1; int fill = 0; /* next: the sample (8 kHz, counted from `from`) the buffer's end stands for */
-  int16_t win[VAD_WIN]; double end = from + want / 100.0; int eof = 0, fin = 0;
-  while (!fin) {
-    if (stop && *stop) { ret = -2; goto done; }
-    if (!eof) { r = av_read_frame(s->ic, s->pk);
-      if (r < 0) { if (r == AVERROR_EXIT && stop && *stop) { ret = -2; goto done; } eof = 1; avcodec_send_packet(s->dec, NULL); } /* the end, or the reading budget spent */
-      else { if (s->pk->stream_index == s->ai) { double pt = (s->pk->pts != AV_NOPTS_VALUE ? s->pk->pts : s->pk->dts) * av_q2d(s->atb);
-          if (s->pk->pts == AV_NOPTS_VALUE && s->pk->dts == AV_NOPTS_VALUE) pt = from;
-          if (pt > end + 1) { eof = 1; avcodec_send_packet(s->dec, NULL); } else if (avcodec_send_packet(s->dec, s->pk) < 0) { /* a damaged frame: skipped */ } }
-        av_packet_unref(s->pk); } }
-    for (;;) { r = avcodec_receive_frame(s->dec, s->fr); if (r == AVERROR_EOF) { fin = 1; break; } if (r < 0) { if (eof) fin = 1; break; }
-      AVFrame *f = s->fr; int64_t ts = f->best_effort_timestamp != AV_NOPTS_VALUE ? f->best_effort_timestamp : f->pts;
-      if (ts == AV_NOPTS_VALUE || f->sample_rate <= 0 || f->nb_samples <= 0) { av_frame_unref(f); continue; }
-      double t = ts * av_q2d(s->atb);
-      if (t > end) { av_frame_unref(f); fin = 1; break; }
-      if (t + f->nb_samples / (double)f->sample_rate < from - 1) { av_frame_unref(f); continue; } /* before the window (the seek lands a little early) */
-      if (!s->swr || f->sample_rate != inRate || f->format != inFmt || av_channel_layout_compare(&f->ch_layout, &inL)) { /* the converter for this sound (again when it changes) */
-        swr_free(&s->swr); av_channel_layout_uninit(&inL); av_channel_layout_copy(&inL, &f->ch_layout); inRate = f->sample_rate; inFmt = f->format;
-        if (swr_alloc_set_opts2(&s->swr, &mono, AV_SAMPLE_FMT_S16, VAD_RATE, &inL, f->format, inRate, 0, NULL) < 0) { snprintf(err, errn, "resampler"); av_frame_unref(f); goto done; }
-        int fc = inL.nb_channels >= 3 ? av_channel_layout_index_from_channel(&inL, AV_CHAN_FRONT_CENTER) : -1;
-        if (fc >= 0 && inL.nb_channels <= 32) { double m[32] = { 0 }; m[fc] = 1; swr_set_matrix(s->swr, m, inL.nb_channels); } /* the dialogue's channel alone */
-        if (swr_init(s->swr) < 0) { snprintf(err, errn, "resampler"); av_frame_unref(f); goto done; }
-        next = -1; fill = 0; }
-      int room = swr_get_out_samples(s->swr, f->nb_samples); if (room > pcap) { int16_t *np = realloc(pcm, (size_t)room * sizeof *pcm); if (!np) { av_frame_unref(f); goto done; } pcm = np; pcap = room; }
-      double lag = swr_get_delay(s->swr, VAD_RATE) / (double)VAD_RATE; /* (what the converter still holds comes out first) */
-      int got = swr_convert(s->swr, (uint8_t **)&pcm, room, (const uint8_t **)f->extended_data, f->nb_samples); av_frame_unref(f); if (got <= 0) continue;
-      long long at = llrint((t - lag - from) * VAD_RATE);
-      if (next < 0 || llabs(at - next) > VAD_RATE / 10) { next = at; fill = 0; } /* the first sound, or a jump in it: placed by its time */
-      for (int i = 0; i < got; i++) {
-        long long idx = next++; /* this sample, counted from `from` */
-        if (idx < 0 || (!fill && idx % VAD_WIN)) continue; /* before the window; windows start on 10 ms boundaries */
-        win[fill++] = pcm[i];
-        if (fill == VAD_WIN) { long long w = idx / VAD_WIN; fill = 0;
-          if (w >= want) { fin = 1; break; }
-          int v = WebRtcVad_Process(vad, VAD_RATE, win, VAD_WIN); out[w] = v > 0;
-          double e = 0; for (int k = 0; k < VAD_WIN; k++) e += (double)win[k] * win[k];
-          for (long long k = top; k < w; k++) db[k] = -100; /* (windows the sound skipped: silence) */
-          db[w] = (float)(10 * log10(e / VAD_WIN / (32768.0 * 32768.0) + 1e-10)); if (w + 1 > top) top = (int)(w + 1); } }
-    }
-  }
-  for (int w = 0; w < top; w++) if (out[w]) { /* the syllable check */
-    float lo = db[w], hi = db[w]; for (int k = w - SWING_W / 2; k < w + SWING_W / 2; k++) if (k >= 0 && k < top) { if (db[k] < lo) lo = db[k]; if (db[k] > hi) hi = db[k]; }
-    if (hi - lo < SWING_DB) out[w] = 0; }
-  ret = top;
-  if (!top) snprintf(err, errn, "no sound decoded");
-done:
-  if (vad) WebRtcVad_Free(vad); free(pcm); free(db); av_channel_layout_uninit(&inL); src_free(s);
-  return ret == 0 ? -1 : ret;
-}
-
 static int sbd_api_v(void) { return SBD_API_VERSION; }
 static const char *sbd_version(void) { static char v[64]; snprintf(v, sizeof v, "FFmpeg %s", av_version_info()); return v; }
-static const sbd_api API_ = { sbd_api_v, sbd_version, sbd_open, sbd_info_of, sbd_seg_start, sbd_seg_dur, sbd_run, sbd_close, sbd_speech };
+static const sbd_api API_ = { sbd_api_v, sbd_version, sbd_open, sbd_info_of, sbd_seg_start, sbd_seg_dur, sbd_run, sbd_close };
 API const sbd_api *sbd_get(void) { return &API_; }

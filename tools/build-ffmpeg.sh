@@ -1,6 +1,5 @@
 #!/bin/bash
-# Builds the sound converter library the app loads when a file's only sound is one the TV can't decode (DTS, TrueHD),
-# and that Auto-sync listens to a file with (speech(): the usual sound codecs decoded, WebRTC's voice detector):
+# Builds the sound converter library the app loads when a file's only sound is one the TV can't decode (DTS, TrueHD):
 #   tools/build-ffmpeg.sh webos  -> build/webos/libsbdts.so      (ARMv7 soft-float, glibc 2.17)
 #   tools/build-ffmpeg.sh mac    -> build/mac/libsbdts.dylib     (the Mac preview)
 # Inside: tools/dts/sbdts.c (Matroska / MP4 in, MPEG-TS segments out: video copied, a Dolby Vision profile 7 picture
@@ -24,11 +23,9 @@ SRC="$W/ffmpeg-$VERSION"; [ -f "$SRC/configure" ] || tar -xJf "$TARBALL" -C "$W"
 B="$W/build-$TARGET"; P="$W/prefix-$TARGET"; mkdir -p "$B"
 # What the converter needs and nothing more: the DTS decoder (the core only is decoded, never the lossless XLL
 # extension), TrueHD / MLP, the AC3 encoder, the Matroska and MP4 readers, the MPEG-TS writer, the parsers and the
-# bitstream filters that turn Matroska's length-prefixed H.264 / HEVC into the start-code form MPEG-TS carries. For
-# Auto-sync, the sound films and series come with: AAC, AC3, E-AC3, MP3 / MP2, Opus, Vorbis, FLAC, PCM (all LGPL).
-COMPONENTS="--disable-everything --enable-decoder=dca,truehd,mlp,aac,aac_latm,ac3,eac3,mp3,mp2,opus,vorbis,flac,pcm_s16le,pcm_s24le --enable-encoder=ac3 \
-  --enable-demuxer=matroska,mov --enable-muxer=mpegts,adts \
-  --enable-parser=dca,h264,hevc,ac3,aac,mlp,mpegaudio,opus,vorbis,flac --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,dca_core"
+# bitstream filters that turn Matroska's length-prefixed H.264 / HEVC into the start-code form MPEG-TS carries.
+COMPONENTS="--disable-everything --enable-decoder=dca,truehd,mlp --enable-encoder=ac3 --enable-demuxer=matroska,mov --enable-muxer=mpegts,adts \
+  --enable-parser=dca,h264,hevc,ac3,aac,mlp --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,dca_core"
 COMMON="--disable-autodetect --enable-zlib --disable-shared --enable-static --enable-pic --disable-programs --disable-doc --disable-debug \
   --disable-network --disable-avdevice --disable-avfilter --disable-swscale --disable-postproc --enable-avcodec --enable-avformat \
   --enable-avutil --enable-swresample --disable-iconv"
@@ -85,13 +82,11 @@ for p in m["packages"]:
 echo "libdovi (dolby_vision 3.3.2, MIT, https://github.com/quietvoid/dovi_tool) and its dependencies, linked statically into libsbdts; their licenses are here. Exact versions: tools/dovi/Cargo.lock." > "$L/dovi/SOURCE.txt"
 mkdir -p "$(dirname "$OUT")"
 LIBS="$P/lib/libavformat.a $P/lib/libavcodec.a $P/lib/libswresample.a $P/lib/libavutil.a $DOVI"
-# WebRTC's voice activity detector (third_party/webrtcvad: BSD-3-Clause, by way of py-webrtcvad, MIT), plain C
-VAD="$(find "$ROOT/third_party/webrtcvad" -name '*.c' | sort | tr '\n' ' ')"; VADF="-DWEBRTC_POSIX -I$ROOT/third_party/webrtcvad"
 if [ "$TARGET" = webos ]; then
   echo '{ global: sbd_get; local: *; };' > "$TC/exports.map"
   "$TC/cc" -std=c11 -O2 -fPIC -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" -ffile-prefix-map=$HOME=/src -ffile-prefix-map=$ROOT=/app \
-    "$ROOT/tools/dts/sbdts.c" $VADF $VAD $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
+    "$ROOT/tools/dts/sbdts.c" $LIBS "$SDK/usr/lib/libz.so" "$SDK/lib/libgcc_s.so.1" -Wl,--gc-sections -Wl,--version-script="$TC/exports.map" -Wl,--strip-all -Wl,-soname,libsbdts.so -lpthread -lm -o "$OUT"
 else
-  cc -std=c11 -O2 -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" $VADF "$ROOT/tools/dts/sbdts.c" $VAD $LIBS -lz -Wl,-dead_strip -o "$OUT"
+  cc -std=c11 -O2 -shared -fvisibility=hidden -D_GNU_SOURCE -I"$P/include" -I"$ROOT/src" "$ROOT/tools/dts/sbdts.c" $LIBS -lz -Wl,-dead_strip -o "$OUT"
 fi
 ls -l "$OUT" | awk '{printf "%s  %.1f MB\n", $NF, $5/1048576}'

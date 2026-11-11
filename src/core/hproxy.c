@@ -85,10 +85,8 @@ static int rd_read(void *ud, long long pos, unsigned char *buf, int n) {
   for (int i = 0; i < k; ) { int o = (int)((pos + i) % RING), m = k - i < RING - o ? k - i : RING - o; memcpy(buf + i, r->ring + o, m); i += m; }
   return k;
 }
-static const sbd_api *D; static int dTried, dApi; static pthread_mutex_t dMu = PTHREAD_MUTEX_INITIALIZER;
-static int dts_load_(void);
-static int dts_load(void) { pthread_mutex_lock(&dMu); int ok = dts_load_(); pthread_mutex_unlock(&dMu); return ok; } /* (the conversion and Auto-sync load it from their threads) */
-static int dts_load_(void) { /* the converter library, beside the app */
+static const sbd_api *D; static int dTried;
+static int dts_load(void) { /* the converter library, beside the app */
   if (D) return 1; if (dTried) return 0; dTried = 1;
   char *base = SDL_GetBasePath(), p[1200];
 #ifdef __APPLE__
@@ -99,9 +97,8 @@ static int dts_load_(void) { /* the converter library, beside the app */
   SDL_free(base);
   void *h = dlopen(p, RTLD_NOW | RTLD_LOCAL); if (!h) { fprintf(stderr, "[dts] no converter library: %s\n", dlerror()); return 0; }
   const sbd_api *(*get)(void) = (const sbd_api *(*)(void))dlsym(h, "sbd_get");
-  int api = get && get() ? get()->api() : 0;
-  if (api < 2 || api > SBD_API_VERSION) { fprintf(stderr, "[dts] the converter library does not match\n"); return 0; } /* (2: it converts, without speech) */
-  D = get(); dApi = api; fprintf(stderr, "[dts] converter %s (api %d)\n", D->version(), api); return 1;
+  if (!get || !get() || get()->api() != SBD_API_VERSION) { fprintf(stderr, "[dts] the converter library does not match\n"); return 0; }
+  D = get(); fprintf(stderr, "[dts] converter %s\n", D->version()); return 1;
 }
 int hls_conv_available(void) {
   if (D) return 1; char *base = SDL_GetBasePath(), p[1200];
@@ -204,20 +201,6 @@ static void conv_serve(int fd, unsigned id, const char *path, int head) {
   }
   pthread_mutex_lock(&mu); c->running = -100; pthread_mutex_unlock(&mu);
   pthread_mutex_unlock(&c->runMu); conv_unref(c);
-}
-
-/* ---- Auto-sync: where someone speaks, read from the file on the calling thread (its own range reader) ---- */
-int hls_speech(const char *url, int audioOrd, double from, double dur, long long maxBytes, unsigned char *out, int cap, volatile int *stop, char *err, size_t errn) {
-  if (!dts_load()) { snprintf(err, errn, "no converter library"); return -1; }
-  if (dApi < 3) { snprintf(err, errn, "the converter library can't listen (api %d)", dApi); return -1; }
-  Reader *r = calloc(1, sizeof *r); if (!r) { snprintf(err, errn, "out of memory"); return -1; }
-  snprintf(r->url, sizeof r->url, "%s", url); r->size = -1; r->stop = stop; r->net = net_range_new(); r->ring = malloc(RING); int n = -1;
-  if (!r->net || !r->ring) snprintf(err, errn, "out of memory");
-  else { unsigned char b1; double t0 = mono_s();
-    if (rd_read(r, 0, &b1, 1) < 1) snprintf(err, errn, "the file can't be read");
-    else { n = D->speech(rd_read, r, r->size, audioOrd, from, dur, maxBytes, out, cap, stop, err, (int)errn);
-      fprintf(stderr, "[sync] listened to %.0f-%.0f s of the file in %.1f s: %d windows%s%s\n", from, from + dur, mono_s() - t0, n > 0 ? n : 0, n > 0 ? "" : ", ", n > 0 ? "" : err); } }
-  net_range_free(r->net); free(r->ring); free(r); return n;
 }
 
 static void *serve(void *a) {

@@ -2,8 +2,6 @@
 #include "core/net.h"
 #include "core/json.h"
 #include "core/addons.h"
-#include "core/hproxy.h"
-#include "core/speechsync.h"
 #include "platform/plat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +23,6 @@ struct SubSync {
   pthread_mutex_t mu; int refs; volatile int cancel, stage; int done; SyncResult res;
   double center, behind, ahead, range; WLine *x, *r; int nx, nr, total; /* bounded copies: times and hashed words */
   SubQuery q; char cur[1024], curLang[24]; RefCand *c; int nc, ccap; /* another subtitle as the reference: what to look for */
-  int audioOrd; /* the film's own sound first: this audio track (-1 the default one, -2 not at all) */
 };
 static void free_r(SubSync *j) { for (int i = 0; i < j->nr; i++) free(j->r[i].w); j->nr = 0; }
 static void release(SubSync *j) {
@@ -330,38 +327,10 @@ static int agree(const SubSync *j, const RefAns *a, const RefAns *b) {
   if (a->local || b->local) { double l0 = j->center - REF_LOCAL, l1 = j->center + REF_LOCAL; if (l0 > t0) t0 = l0; if (l1 < t1) t1 = l1; } /* (an answer for the playhead's surroundings: compared there) */
   return !apart(a->f, a->d, b->f, b->d, t0, t1);
 }
-/* ---- the film's own sound as the reference: the surest of all (it is this very file), so it is asked first. A few
-   minutes around the playhead are read and decoded on the TV (libsbdts), where someone speaks is matched against where
-   the subtitle has lines (core/speechsync). Reading is capped (a high-bitrate file covers less time); with too little
-   speech heard, or no clear answer, the other subtitles are asked as before ---- */
-#define LISTEN_BEHIND 30.0
-#define LISTEN_S 240.0
-#define LISTEN_BYTES (200ll << 20)
-#define LISTEN_RANGE 150.0
-static int listen_ref(SubSync *j, SyncResult *r) {
-  double from = j->center > LISTEN_BEHIND + 10 ? j->center - LISTEN_BEHIND : 0; int cap = (int)(2 * LISTEN_S * 100);
-  unsigned char *bits = malloc((size_t)cap); SpLine *x = malloc((size_t)(j->nx ? j->nx : 1) * sizeof *x); char err[160] = ""; int ok = 0, n = 0;
-  if (!bits || !x) { free(bits); free(x); return 0; }
-  for (int i = 0; i < j->nx; i++) { x[i].s = j->x[i].s; x[i].e = j->x[i].e; }
-  j->stage = 2;
-  /* a few minutes; when the answer looks right but isn't clear yet (few lines there), as many again after them */
-  for (int round = 0; round < 2 && !j->cancel; round++) {
-    int k = hls_speech(j->q.url, j->audioOrd, from + n / 100.0, LISTEN_S, LISTEN_BYTES, bits + n, cap - n, &j->cancel, err, sizeof err);
-    if (k <= 0) { if (k != -2 && !j->cancel) fprintf(stderr, "[sync] couldn't listen (%s)%s\n", err, n ? "" : ": the other subtitles next"); break; }
-    n += k; if (j->cancel) break;
-    SpAnswer a; if (!speech_match(bits, n, from, x, j->nx, LISTEN_RANGE, &a)) { fprintf(stderr, "[sync] too little speech heard\n"); if (k < LISTEN_S * 100 - 100) break; continue; }
-    if (a.ok) { r->st = SYNC_OK; r->d = a.d; r->f = a.f; r->score = (float)a.score; r->byWords = 0; ok = 1; break; }
-    if (!a.promising || k < LISTEN_S * 100 - 100) break; /* (nothing like an answer, or the end of the file / the reading cap) */
-    fprintf(stderr, "[sync] likely %+.2f s, not clear yet: listening further\n", a.d);
-  }
-  if (!ok && !j->cancel) fprintf(stderr, "[sync] the sound gave no clear answer: the other subtitles next\n");
-  free(bits); free(x); j->stage = 1; return ok;
-}
 static void *ref_main(void *arg) {
   plat_thread_background(5);
   SubSync *j = arg; SyncResult r = { SYNC_NOREF, 0, 1, 0, 0 }; SubQuery *q = &j->q;
   if (j->total < 10) { r.st = SYNC_NOSUB; finish(j, r); return NULL; }
-  if (j->audioOrd > -2 && !j->cancel && listen_ref(j, &r)) { fprintf(stderr, "[sync] lined up by the sound: %+.2f s%s\n", r.d, fabs(r.f - 1) > 0.001 ? ", speed fixed" : ""); finish(j, r); return NULL; }
   if (!q->hash[0] && q->hashable && !j->cancel) { double sz = q->size; char h[17]; if (subs_os_hash(q->url, &sz, h)) { snprintf(q->hash, sizeof q->hash, "%s", h); q->size = sz; } }
   if (q->hash[0] && q->type[0] && q->vid[0] && !j->cancel) by_hash(j);
   rank(j);
@@ -406,15 +375,15 @@ static void *ref_main(void *arg) {
     if (!j->cancel) fprintf(stderr, "[sync] %s\n", r.st == SYNC_UNSURE ? "no reference gave a clear answer" : r.st == SYNC_NOSUB ? "the references could not be read" : "no other subtitle made for this file"); }
   finish(j, r); return NULL;
 }
-SubSync *subsync_start_ref(const Cue *X, int nx, double center, const SubQuery *q, const char *curUrl, const char *curLang, const SyncRef *refs, int nrefs, int audioOrd) {
-  SubSync *j = job_new(center, REF_BEHIND, REF_AHEAD, nx, R_MAX); if (!j) return NULL; j->audioOrd = audioOrd;
+SubSync *subsync_start_ref(const Cue *X, int nx, double center, const SubQuery *q, const char *curUrl, const char *curLang, const SyncRef *refs, int nrefs) {
+  SubSync *j = job_new(center, REF_BEHIND, REF_AHEAD, nx, R_MAX); if (!j) return NULL;
   j->range = REF_RANGE; load_x(j, X, nx); j->q = *q; snprintf(j->cur, sizeof j->cur, "%s", curUrl ? curUrl : ""); subs_lang_canon(curLang ? curLang : "", j->curLang, sizeof j->curLang);
   if (!j->q.filename[0]) { /* the file's name from its address (debrid links end with it) */
     const char *u = q->url, *e = u + strcspn(u, "?#"), *b = e; while (b > u && b[-1] != '/') b--; size_t o = 0;
     for (const char *p = b; p < e && o + 1 < sizeof j->q.filename; p++) { if (*p == '%' && p + 2 < e) { unsigned v; if (sscanf(p + 1, "%2x", &v) == 1) { j->q.filename[o++] = (char)v; p += 2; continue; } } j->q.filename[o++] = *p == '+' ? ' ' : *p; }
     j->q.filename[o] = 0; }
   for (int i = 0; i < nrefs; i++) { SyncRef r = refs[i]; subs_lang_canon(refs[i].lang, r.lang, sizeof r.lang); cand_add(j, &r); }
-  j->stage = audioOrd > -2 ? 2 : 1; start(j, ref_main); return j;
+  j->stage = 1; start(j, ref_main); return j;
 }
 int subsync_stage(SubSync *j) { return j ? j->stage : 0; }
 int subsync_poll(SubSync *j, SyncResult *out) {
