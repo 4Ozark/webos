@@ -8,6 +8,7 @@
 #include "core/store.h"
 #include "core/subs.h"
 #include "core/subprefs.h"
+#include "core/cwlogic.h"
 #include "platform/plat.h"
 #include "core/video.h"
 #include "ui/shared.h"
@@ -132,7 +133,7 @@ static struct {
   /* tray */ struct { int kind; /* 0 none 1 eps 2 src 3 aud 4 subs 5 epsrc */ char tabs[40][48]; int ntabs, tab, seasonList[40], season; int zone; /* 0 row 1 tabs 2 cols */ TItem row[MAXROW]; int n, idx, onBtn; TCol cols[4]; int ncols, c, r[4]; char title[300], epvid[80]; int backIdx, backTab; Mo open, openA; float ox, oy; Mo rowX, tabsX, colY[4], ringX, ringY, ringA, plY[4], plA[4]; float ringW, ringH; int loading; int armed; } tray;
   /* the sources tray's lists: one per addon serving the video (in the user's order), each asked when first seen */
   struct { char vid[80]; struct { char name[96]; Stream *items; float *h; int n, st, open; unsigned tok; Mo fa, bh, ia; float bhT; int leaving, seen, touched; } g[16]; int ng, on; } srcs; /* fa: how open its list is (alpha, slide), bh: its list's height as laid out now, ia: its rows fading in as they come */
-  /* subs */ SubEntry *ext; int next_; int nExt, extLoading; char curSub[1100]; struct { int list; char addon[64], lang[24]; } pick; Cue *cues; int ncues; double subDelay; VidTrack emb[16]; int nEmb; int autoSubDone; unsigned subReq; unsigned trSubTok; int locDone;
+  /* subs */ SubEntry *ext; int next_; int nExt, extLoading; char curSub[1100]; struct { int list; char addon[64], lang[24]; } pick; Cue *cues; int ncues; double subDelay; VidTrack emb[16]; int nEmb; int autoSubDone; unsigned subReq; unsigned trSubTok; int locDone; struct { int has; char sub[1200], aud[28]; double delay; int haveDly; } pv; int pvU; /* pv: what the viewer chose here last time; pvU: what they changed this time (1 subtitle, 2 audio, 4 delay) */
   int curAud; int autoAudDone; int didResume;
   /* sound this TV can't decode (DTS, TrueHD): when the DTS track started playing, the codecs refused on this stream (error
      200), what was said */ struct { double playAt; char bad[4][16]; int nbad, said, gaveUp, switches;
@@ -246,7 +247,8 @@ static int episodic(void) {
   const cJSON *v = P.meta ? js_arr(P.meta, "videos") : NULL; return v && cJSON_GetArraySize(v) > 1;
 }
 static Item lib_item(void) { Item it; memset(&it, 0, sizeof it); snprintf(it.id, sizeof it.id, "%s", P.id); snprintf(it.type, sizeof it.type, "%s", P.type); snprintf(it.name, sizeof it.name, "%s", P.name); snprintf(it.poster, sizeof it.poster, "%s", P.poster); snprintf(it.background, sizeof it.background, "%s", P.bg); snprintf(it.logo, sizeof it.logo, "%s", P.logo); return it; }
-static void save_progress(int push) { double d = dur(); if (!P.id[0] || P.isTrailer || P.advanced || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
+static void pv_flush(void);
+static void save_progress(int push) { pv_flush(); double d = dur(); if (!P.id[0] || P.isTrailer || P.advanced || d <= 0 || getenv("SB_PLAY_NOSAVE")) return; /* (SB_PLAY_NOSAVE: development plays leave the library alone) */ Item it = lib_item(); lib_set_progress(P.id, &it, P.vid, video_time() * 1000, d * 1000, push); P.lastSave = now_(); }
 static void mark_watched(void) {
   if (P.isTrailer || P.marked || getenv("SB_PLAY_NOSAVE")) return; P.marked = 1; Item it = lib_item(); cJSON *l = lib_get(P.id); if (!l) l = lib_new_item(&it);
   if (episodic() && P.videos) { const char *ids[1] = { P.vid }; lib_set_eps_watched(l, P.videos, ids, 1, 1); } else lib_set_movie_watched(l, 1);
@@ -254,6 +256,8 @@ static void mark_watched(void) {
 /* The episode is done and the next one is known (from the title page's data, no request): the title's state moves on to it, so
    Continue Watching shows it as soon as the player closes, without the series page being opened. Not for a film, a trailer,
    the last episode, or when the next episode is not known yet (then nothing changes: the title page still finds it). */
+/* the last minute or so of an episode is credits or an ad: leaving then counts as watched (core/cwlogic.c has the rule) */
+static int near_end(void) { return !P.isTrailer && !P.advanced && cw_near_end(dur(), video_time(), P.outro.has, P.outro.s); }
 static int up_next_ok(void) { return !P.isTrailer && !P.advanced && P.next.has && P.next.vid[0] && P.id[0] && episodic() && !getenv("SB_PLAY_NOSAVE"); }
 static void advance_up_next(void) {
   if (!up_next_ok()) return; Item it = lib_item();
@@ -285,6 +289,7 @@ static void sub_ass_font(const char *lang, char *path, size_t pcap, char *fam, s
   snprintf(path, pcap, "%s/fonts/%s", plat_asset_dir(), f->file); snprintf(fam, fcap, "%s", f->family);
 }
 /* Position: where the lines sit (core/subprefs.c), in layout units, + raises. The default is where they always sat. */
+static int dim_idx(void) { return subdim_index(store_get("subsDim", "0")); }
 static int pos_idx(void) { return subpos_index(store_get("subsPos", "0")); }
 static float sub_pos_off(void) { return subpos_offset(pos_idx()); }
 /* v: the page's bottom (8 % at rest; higher while the controls, the seek bar or a tray are up). Raising never goes lower than what
@@ -373,11 +378,59 @@ static void ass_sync(void) {
   float vx = 0, vy = 0, vw = SB_W, vh = SB_H; int w = video_width(), h = video_height();
   if (w > 0 && h > 0 && !strcmp(P.aspect, "fit")) { float a = (float)w / h; if (a > SB_W / SB_H) { vh = SB_W / a; vy = (SB_H - vh) / 2; } else { vw = SB_H * a; vx = (SB_W - vw) / 2; } }
   VidState vs = video_state();
+  asssubs_dim(subdim_scale(dim_idx()));
   asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f, sub_pos_off());
 }
 static void sync_auto_arm(void);
+/* ---- what the viewer chose for this title is kept (store key "pv", by the video's id: the same for any source, a torrent too) and
+   comes back the next time it opens: the subtitle (off, one of the file's own by language, or the very file from an addon), the
+   audio language and the subtitle delay. Only what the viewer changed is kept; the rest stays automatic. ---- */
+#define PV_MAX 200
+static int aud_list(VidTrack *ts, int max);
+static cJSON *pv_obj(int make) { cJSON *n = store_node("pv"); if (!n && make) { n = cJSON_CreateObject(); store_set_node("pv", n); n = store_node("pv"); } return n; }
+static void pv_load(void) {
+  memset(&P.pv, 0, sizeof P.pv); P.pvU = 0; if (P.isTrailer || !P.vid[0]) return; cJSON *o = pv_obj(0), *e = o ? cJSON_GetObjectItemCaseSensitive(o, P.vid) : NULL; if (!e) return;
+  const char *sv = js_str(e, "s", ""), *au = js_str(e, "a", ""); snprintf(P.pv.sub, sizeof P.pv.sub, "%s", sv); snprintf(P.pv.aud, sizeof P.pv.aud, "%s", au);
+  if (cJSON_GetObjectItemCaseSensitive(e, "d")) { P.pv.haveDly = 1; P.pv.delay = js_num(e, "d", 0) / 1000.0; if (P.pv.delay > 120 || P.pv.delay < -120) P.pv.delay = 0; }
+  P.pv.has = P.pv.sub[0] || P.pv.aud[0] || P.pv.haveDly; if (P.pv.haveDly) P.subDelay = P.pv.delay;
+  if (P.pv.has) fprintf(stderr, "[pv] %s: sub \"%.40s\" audio \"%s\" delay %s%.1f s\n", P.vid, P.pv.sub, P.pv.aud, P.pv.haveDly ? "" : "(none) ", P.pv.delay);
+}
+static void pv_flush(void) {
+  if (!P.pvU || P.isTrailer || !P.vid[0] || getenv("SB_PLAY_NOSAVE")) { P.pvU = 0; return; }
+  cJSON *o = pv_obj(1); if (!o) { P.pvU = 0; return; } cJSON *e = cJSON_GetObjectItemCaseSensitive(o, P.vid); if (!e) e = cJSON_AddObjectToObject(o, P.vid); if (!e) { P.pvU = 0; return; }
+  if (P.pvU & 1) { char v[1200]; v[0] = 0;
+    if (!strcmp(P.curSub, "off")) snprintf(v, sizeof v, "off");
+    else if (!strncmp(P.curSub, "emb:", 4)) { int n = atoi(P.curSub + 4), k = -1, ord = 0; for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == n) k = i;
+      if (k >= 0) { for (int i = 0; i < k; i++) if (!strcmp(P.emb[i].lang, P.emb[k].lang)) ord++; snprintf(v, sizeof v, "emb|%s|%d", P.emb[k].lang, ord); } }
+    else if (!strncmp(P.curSub, "ext:", 4)) snprintf(v, sizeof v, "ext|%d|%s|%s|%s", P.pick.list, P.pick.addon, P.pick.lang, P.curSub + 4);
+    if (v[0]) cJSON_ReplaceItemInObjectCaseSensitive(e, "s", cJSON_CreateString(v)); }
+  if ((P.pvU & 2) && P.curAud >= 0) { VidTrack ts[16]; int n = aud_list(ts, 16), k = -1; for (int i = 0; i < n; i++) if (ts[i].idx == P.curAud) k = i;
+    if (k >= 0) { char v[28]; if (ts[k].lang[0]) { int ord = 0; for (int i = 0; i < k; i++) if (!strcmp(ts[i].lang, ts[k].lang)) ord++; snprintf(v, sizeof v, "%.20s|%d", ts[k].lang, ord); } else snprintf(v, sizeof v, "#%d", k);
+      cJSON_ReplaceItemInObjectCaseSensitive(e, "a", cJSON_CreateString(v)); } }
+  if (P.pvU & 4) cJSON_ReplaceItemInObjectCaseSensitive(e, "d", cJSON_CreateNumber((int)lround(P.subDelay * 1000)));
+  cJSON_ReplaceItemInObjectCaseSensitive(e, "t", cJSON_CreateNumber((double)time(NULL)));
+  while (cJSON_GetArraySize(o) > PV_MAX) { cJSON *old = NULL; double ot = 1e18; for (cJSON *c = o->child; c; c = c->next) { double t = js_num(c, "t", 0); if (c != e && t < ot) { ot = t; old = c; } } if (!old) break; cJSON_DeleteItemFromObjectCaseSensitive(o, old->string); }
+  store_set_node("pv", o); P.pvU = 0;
+}
+/* the choice kept for this title, applied when it can be: 1 handled (done, or waiting for the file's tracks), 0 nothing kept / not found: the usual automatic choice follows */
+static int pv_try_sub(void) {
+  const char *sv = P.pv.sub; if (!P.pv.has || !*sv) return 0;
+  if (!strcmp(sv, "off")) { P.autoSubDone = 1; fprintf(stderr, "[pv] subtitles stay off\n"); return 1; }
+  if (!strncmp(sv, "emb|", 4)) { char lang[24]; int ord = 0; const char *q = strchr(sv + 4, '|'); size_t ll = q ? (size_t)(q - sv - 4) : 0; if (!q || ll >= sizeof lang) return 0; memcpy(lang, sv + 4, ll); lang[ll] = 0; ord = atoi(q + 1);
+    int k = -1, seen = 0; for (int j = 0; j < P.nEmb; j++) if (!strcmp(P.emb[j].lang, lang) && seen++ == ord) { k = j; break; }
+    if (k < 0) for (int j = 0; j < P.nEmb && k < 0; j++) if (lang[0] && lang_match(P.emb[j].lang, lang)) k = j;
+    if (k >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[k].idx); return 1; }
+    if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return 1; } /* the file's own tracks get 8 s to show up */
+    return 0; }
+  if (!strncmp(sv, "ext|", 4)) { SubEntry e; memset(&e, 0, sizeof e); char b[1200]; snprintf(b, sizeof b, "%s", sv + 4); char *f[4] = { 0 }; char *c = b; int nf = 0;
+    while (nf < 3 && c) { f[nf++] = c; char *x = strchr(c, '|'); if (!x) { c = NULL; break; } *x = 0; c = x + 1; } f[3] = c; if (nf < 3 || !f[3] || !*f[3]) return 0;
+    snprintf(e.addon, sizeof e.addon, "%s", f[1]); snprintf(e.lang, sizeof e.lang, "%s", f[2]); snprintf(e.url, sizeof e.url, "%s", f[3]);
+    P.autoSubDone = 1; set_ext_sub(atoi(f[0]) == 2 ? 2 : 1, &e); sync_auto_arm(); return 1; }
+  return 0;
+}
 static void auto_sub(void) {
-  const char *w = want_sub(); if (P.autoSubDone || strcmp(P.curSub, "off")) return; if (!*w) return;
+  if (P.autoSubDone || strcmp(P.curSub, "off")) return; if (pv_try_sub()) return;
+  const char *w = want_sub(); if (!*w) return;
   int em = -1; for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (em < 0 || (P.emb[em].forced && !P.emb[j].forced))) em = j;
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
@@ -570,7 +623,14 @@ static void aud_label(const VidTrack *t, char *out, size_t cap) { /* "AC3 5.1" *
   int ch = t->channels; snprintf(out, cap, "%s%s", c, ch == 6 ? " 5.1" : ch == 8 ? " 7.1" : ch == 2 ? " 2.0" : ch == 1 ? " 1.0" : "");
 }
 static void auto_audio(void) {
-  if (P.autoAudDone || strcmp(store_get("enableDefaultAudioTrack", "false"), "true")) return; const char *want = store_get("defaultAudioTrack", ""); if (!*want) return;
+  if (P.autoAudDone) return;
+  if (P.pv.aud[0]) { VidTrack ts[16]; int n = aud_list(ts, 16); if (n) { int pick = -1;
+      if (P.pv.aud[0] == '#') { int k = atoi(P.pv.aud + 1); if (k >= 0 && k < n) pick = k; }
+      else { char lang[24]; int ord = 0; const char *q = strchr(P.pv.aud, '|'); size_t ll = q ? (size_t)(q - P.pv.aud) : strlen(P.pv.aud); if (ll < sizeof lang) { memcpy(lang, P.pv.aud, ll); lang[ll] = 0; if (q) ord = atoi(q + 1);
+          int seen = 0; for (int i = 0; i < n; i++) if (!strcmp(ts[i].lang, lang) && seen++ == ord) { pick = i; break; }
+          if (pick < 0) for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, lang)) { pick = i; break; } } }
+      P.autoAudDone = 1; if (pick >= 0 && ts[pick].idx != P.curAud) { fprintf(stderr, "[pv] audio: %s\n", P.pv.aud); set_audio(ts[pick].idx); } return; } }
+  if (strcmp(store_get("enableDefaultAudioTrack", "false"), "true")) return; const char *want = store_get("defaultAudioTrack", ""); if (!*want) return;
   VidTrack ts[16]; int n = aud_list(ts, 16); if (!n) return; int pick = -1;
   for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, want) && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* in that language, one whose sound plays here first */
   if (pick < 0 && strcmp(want, "eng")) for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, "eng") && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* not in the file: English, when the file has it */
@@ -1045,17 +1105,17 @@ static const float C_GLIDE[4] = { .25f, 1, .5f, 1 }; /* GLIDE_EASE's curve, for 
 static struct {
   Mo tabX, tabW, tabF; int tabSeen; Mo swA; int swDir, swPend; Mo colBX, colBA; int colBSeen; int quiet;
   unsigned colSig[4], rowSig; Mo colA[4], rowA; int onIdx[4], rowOn; Mo chkA[4], rowChk; int vkC; char vkU[8]; Mo vkA;
-  Mo dot[5]; int dotSeen[5]; /* 0 the picture size, 1 subtitle size, 2 colour, 3 background, 4 subtitle position */
+  Mo dot[6]; int dotSeen[6]; /* 0 the picture size, 1 subtitle size, 2 colour, 3 background, 4 subtitle position, 5 brightness */
   Mo swK[2]; int swFrom[2], swCur[2], swSeen[2]; /* the colour and background swatches: the one before, the one now, how far it has come */
 } TM;
 static void tm_tick(float dt) {
-  Mo *m[] = { &TM.tabX, &TM.tabW, &TM.tabF, &TM.swA, &TM.colBX, &TM.colBA, &TM.rowA, &TM.rowChk, &TM.vkA, &TM.dot[0], &TM.dot[1], &TM.dot[2], &TM.dot[3], &TM.swK[0], &TM.swK[1] };
+  Mo *m[] = { &TM.tabX, &TM.tabW, &TM.tabF, &TM.swA, &TM.colBX, &TM.colBA, &TM.rowA, &TM.rowChk, &TM.vkA, &TM.dot[0], &TM.dot[1], &TM.dot[2], &TM.dot[3], &TM.dot[4], &TM.dot[5], &TM.swK[0], &TM.swK[1] };
   for (size_t i = 0; i < sizeof m / sizeof *m; i++) mo_tick(m[i], dt); for (int i = 0; i < 4; i++) { mo_tick(&TM.colA[i], dt); mo_tick(&TM.chkA[i], dt); }
 }
 static void tm_reset(void) { /* a tray opening: everything where it is, nothing gliding in from an old place */
   TM.tabSeen = TM.colBSeen = TM.swPend = 0; mo_set(&TM.swA, 1); mo_set(&TM.colBA, 0); mo_set(&TM.tabF, 0); mo_set(&TM.vkA, 1); TM.vkU[0] = 0;
   for (int i = 0; i < 4; i++) { mo_set(&TM.colA[i], 1); mo_set(&TM.chkA[i], 1); TM.onIdx[i] = -2; TM.colSig[i] = 0; } mo_set(&TM.rowA, 1); mo_set(&TM.rowChk, 1); TM.rowOn = -2; TM.rowSig = 0;
-  for (int i = 1; i < 5; i++) TM.dotSeen[i] = 0; TM.swSeen[0] = TM.swSeen[1] = 0;
+  for (int i = 1; i < 6; i++) TM.dotSeen[i] = 0; TM.swSeen[0] = TM.swSeen[1] = 0;
 }
 static unsigned str_sig(unsigned h, const char *s) { while (*s) h = h * 31 + (unsigned char)*s++; return h * 31 + 7; }
 static int item_on(const TItem *it) { return strncmp(it->u, "lang:", 5) ? it->on && !it->tool : it->d > 0; }
@@ -1213,6 +1273,7 @@ static void tray_data(void) {
     }
     int ci = color_idx(); x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Size")); snprintf(x->vl, 48, "%d%%", SUB_SIZES[size_idx()]); snprintf(x->u, 1024, "size");
     x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Position")); snprintf(x->vl, 48, "%s", T(subpos_label(pos_idx()))); snprintf(x->u, 1024, "pos"); /* each press: one place up, then round to the lowest */
+    x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Brightness")); snprintf(x->vl, 48, "%s", T(subdim_label(dim_idx()))); snprintf(x->u, 1024, "dim"); /* each press: one step dimmer, then back to normal */
     x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Colour")); snprintf(x->u, 1024, "color"); /* colour and background: shown by their swatch (drawn with the column) */
     x = col_add(c3, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Background")); snprintf(x->u, 1024, "bg"); (void)ci;
     if (!P.isTrailer && !strncmp(P.curSub, "ext:", 4)) { x = col_add(c4, 4); x->tool = 1; snprintf(x->lb, 200, "%s", T("Auto-sync")); snprintf(x->sub, 120, "%s", SY.st); snprintf(x->u, 1024, "sync"); } /* a downloaded subtitle: lined up with the file's own */
@@ -1302,6 +1363,7 @@ static void tray_back(void) {
 static void adjust(const char *k) {
   if (!strcmp(k, "size")) { char v[4]; snprintf(v, sizeof v, "%d", (size_idx() + 1) % 7); store_set("subtitleSize", v); }
   else if (!strcmp(k, "pos")) store_set("subsPos", subpos_value((pos_idx() + 1) % SUBPOS_N));
+  else if (!strcmp(k, "dim")) store_set("subsDim", subdim_value((dim_idx() + 1) % SUBDIM_N));
   else if (!strcmp(k, "color")) { int ci = color_idx(); store_set("subsColor", SUB_COLORS[((ci < 0 ? 0 : ci) + 1) % 3]); }
   else if (!strcmp(k, "bg")) store_set("subsBgStyle", SUB_BGS[(bg_idx() + 1) % 3]);
   render_tray(0);
@@ -1310,16 +1372,16 @@ static void choose(TItem *it) {
   if (!it) return;
   if (it->k == 4 && P.tray.kind == 4) {
     if (!strncmp(it->u, "lang:", 5)) { snprintf(P.subLang, sizeof P.subLang, "%s", it->u + 5); render_tray(0); if (P.tray.ncols > 1) { int r = first_on(P.tray.cols[1].items, P.tray.cols[1].n); if (r >= 0) { P.tray.c = 1; P.tray.r[1] = r; } } } /* its subtitles: the focus goes over */
-    else if (!strcmp(it->u, "off")) subs_off(); else if (!strncmp(it->u, "emb:", 4)) set_emb_sub(it->i); else if (it->tool) { if (strcmp(it->u, "sync")) { TM.vkC = P.tray.c; snprintf(TM.vkU, sizeof TM.vkU, "%s", it->u); mo_set(&TM.vkA, 0); mo_to(&TM.vkA, 1, .2f, C_OUT, 0); } if (!strcmp(it->u, "sync")) sync_run(); else if (!strcmp(it->u, "dlyopen")) { dly_open(); return; } else if (!strcmp(it->u, "dly")) { P.subDelay = it->d ? (double)((int)((P.subDelay + it->d) * 10 + (P.subDelay + it->d >= 0 ? 0.5 : -0.5))) / 10 : 0; if (!it->d) sync_undo(); render_tray(0); } else adjust(it->u); }
+    else if (!strcmp(it->u, "off")) { subs_off(); P.pvU |= 1; } else if (!strncmp(it->u, "emb:", 4)) { set_emb_sub(it->i); P.pvU |= 1; } else if (it->tool) { if (strcmp(it->u, "sync")) { TM.vkC = P.tray.c; snprintf(TM.vkU, sizeof TM.vkU, "%s", it->u); mo_set(&TM.vkA, 0); mo_to(&TM.vkA, 1, .2f, C_OUT, 0); } if (!strcmp(it->u, "sync")) sync_run(); else if (!strcmp(it->u, "dlyopen")) { dly_open(); return; } else if (!strcmp(it->u, "dly")) { P.pvU |= 4; P.subDelay = it->d ? (double)((int)((P.subDelay + it->d) * 10 + (P.subDelay + it->d >= 0 ? 0.5 : -0.5))) / 10 : 0; if (!it->d) sync_undo(); render_tray(0); } else adjust(it->u); }
     else if (it->ls) { const SubEntry *l = it->ls == 1 ? P.ext : P.adx; int n = it->ls == 1 ? P.nExt : P.nAdx, k = it->i; /* the row's entry (found again by its file if the list moved) */
       if (k < 0 || k >= n || strcmp(l[k].url, it->u)) for (k = 0; k < n && strcmp(l[k].url, it->u); k++) ;
-      if (k < n) set_ext_sub(it->ls, &l[k]); }
+      if (k < n) { set_ext_sub(it->ls, &l[k]); P.pvU |= 1; } }
   } else if (it->k == 4 && P.tray.kind == 3 && it->i >= 1000) { int ord = it->i - 1000; /* another track converted, from here */
     if (P.dts.conv == 2 && ord != P.dts.convOrd && ord >= 0) { P.dts.convOrd = ord; P.dts.conv = 1; P.dts.convAt = video_time(); P.dts.convT0 = now_();
       int fl = conv_flags(ord); P.dts.copyA = !!(fl & HC_COPYAUDIO);
       video_unload(); P.live = 0; P.liveT0 = 0; hls_conv_start(P.url, ord, fl); fprintf(stderr, "[dts] audio track %d instead (%s)\n", ord, P.dts.copyA ? "copied" : "converted"); }
     render_tray(0); }
-  else if (it->k == 4 && P.tray.kind == 3) { set_audio(it->i); render_tray(0); }
+  else if (it->k == 4 && P.tray.kind == 3) { set_audio(it->i); P.pvU |= 2; render_tray(0); }
   else if (it->k == 2) { /* an episode: its sources, right here */
     const cJSON *v = it->v; P.tray.backIdx = P.tray.idx; P.tray.backTab = P.tray.tab; P.tray.kind = 5; snprintf(P.tray.epvid, sizeof P.tray.epvid, "%s", js_str(v, "id", "")); P.tray.idx = -1; P.tray.tab = 0; P.tray.zone = 0;
     snprintf(P.tray.title, 300, "S%d:E%d  ·  %s", (int)js_num(v, "season", 0), (int)js_num(v, "episode", 0), js_str(v, "name", js_str(v, "title", ""))); render_tray(1);
@@ -1380,7 +1442,7 @@ static void dly_draw(void);
 #define DLY_STEP 0.25
 static void dly_open(void) { close_tray(); P.osd = 0; P.mode = 4; P.dlyF = 0; mo_set(&P.dlyR, 0); mo_to(&P.dlyA, 1, .28f, C_OUT, 0); }
 static void dly_close(void) { P.mode = 0; mo_to(&P.dlyA, 0, .2f, C_EASE, 0); }
-static void dly_change(double d) { double v = P.subDelay + d; v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
+static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay + d; v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
 static void dly_act(int i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0);
   if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close(); }
 static void dly_key(int k) {
@@ -1394,6 +1456,7 @@ static void act(const char *id) {
   else open_tray(!strcmp(id, "eps") ? 1 : !strcmp(id, "src") ? 2 : !strcmp(id, "aud") ? 3 : 4);
   arm_hide();
 }
+static double backArmAt;
 static void back(void) {
   if (P.closing) return;
   if (P.mode == 2) { tray_back(); return; }
@@ -1402,7 +1465,8 @@ static void back(void) {
   if (P.mode == 3) { dismiss_prompt(); return; }
   if (P.seekT >= 0) { cancel_seek(); return; }
   if (P.mode == 1 && !paused()) { hide_osd(); return; }
-  close_player(0, 0);
+  if (now_() > backArmAt) { backArmAt = now_() + 2.5; toast(T("Press Back again to exit"), 2300, NULL); return; } /* once more within 2.5 s to leave */
+  backArmAt = 0; close_player(0, 0);
 }
 static void ss_exit(void) { P.ssOn = 0; P.lastAct = now_(); }
 static void try_next(void);
@@ -1551,6 +1615,7 @@ static void hand_snap(void) {
 static void hand_tick(float dt) { mo_tick(&handA, dt); if (handSnap.fbo && !handA.on && handA.v <= 0.001f) gfx_target_free(&handSnap); }
 static void hand_draw(void) { if (handSnap.fbo && handA.v > 0.001f) gfx_image(handSnap.tex, 0, 0, SB_W, SB_H, 0, WHITE_A((int)(255 * handA.v + .5f)), 0, 1, 1, 0); }
 static void prepare(const char *vid, double startAt, int keepSubs) {
+  if (P.open) pv_flush();
   resumeMsg[0] = 0; loadGen++;
   int again = P.open; char type[16]; snprintf(type, sizeof type, "%s", P.type);
   float artWas = again ? P.artA.v : 1; /* the art comes back from where it is (the page's .45 s), never at once */
@@ -1566,6 +1631,7 @@ static void prepare(const char *vid, double startAt, int keepSubs) {
   if (!strcmp(P.type, "series")) { const char *c = strrchr(P.vid, ':'); if (c && c > P.vid) { const char *q = c - 1; while (q > P.vid && *q != ':') q--; if (*q == ':') { P.season = atoi(q + 1); P.episode = atoi(c + 1); } } } /* known from the id, the metadata or not */
   memset(&P.pg.g, 0, sizeof P.pg.g); P.pg.age = 0; P.pg.certAge = -1; P.pg.guideIn = P.pg.certIn = 0; P.pg.asked = 0; P.pg.sess++; P.pg.at = P.pg.askAt = 0; mo_set(&P.pgA, 0); mo_set(&P.pgY, -10);
   mo_set(&P.artA, artWas); mo_set(&P.in, again ? 1 : 0); mo_set(&P.lnA, 1); mo_set(&P.prB, 104); mo_set(&P.subB, SB_H * 0.08f); mo_set(&P.ttlX, -30); mo_set(&P.barY, 18); mo_set(&P.btnY, 24); mo_set(&P.topY, -12); mo_set(&P.prY, 20); mo_set(&P.skS, 0); mo_set(&P.ccS, 1);
+  pv_load();
   fill_from_meta(); if (!P.logo[0] && !strncmp(P.id, "tt", 2)) snprintf(P.logo, sizeof P.logo, "https://images.metahub.space/logo/medium/%s/img", P.id);
   if (!P.bg[0]) { Item it = lib_item(); sb_bg_mid(&it, P.bg, sizeof P.bg); }
 }
@@ -1694,17 +1760,17 @@ char *player_cast_tracks(void) {
 /* a phone's pick, as the trays make it: kind "sub" (id or "off"), "audio" (id), "subdelay" (ms, absolute) */
 void player_cast_track(const char *kind, const char *id, int ms) {
   if (!P.open || P.closing) return;
-  if (!strcmp(kind, "subdelay")) { double v = ms / 1000.0; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); refresh_tray(4); return; }
+  if (!strcmp(kind, "subdelay")) { P.pvU |= 4; double v = ms / 1000.0; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); refresh_tray(4); return; }
   if (!strcmp(kind, "sub")) {
-    if (!strcmp(id, "off")) subs_off();
-    else if (!strncmp(id, "emb:", 4)) set_emb_sub(atoi(id + 4));
-    else if (!strncmp(id, "ext1:", 5) || !strncmp(id, "ext2:", 5)) { int li = id[3] - '0', k = atoi(id + 5); const SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx; if (k >= 0 && k < n) set_ext_sub(li, &l[k]); }
+    if (!strcmp(id, "off")) { subs_off(); P.pvU |= 1; }
+    else if (!strncmp(id, "emb:", 4)) { set_emb_sub(atoi(id + 4)); P.pvU |= 1; }
+    else if (!strncmp(id, "ext1:", 5) || !strncmp(id, "ext2:", 5)) { int li = id[3] - '0', k = atoi(id + 5); const SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx; if (k >= 0 && k < n) { set_ext_sub(li, &l[k]); P.pvU |= 1; } }
     refresh_tray(4); return; }
   if (!strcmp(kind, "audio")) {
     if (!strncmp(id, "conv:", 5)) { int ord = atoi(id + 5);
       if (P.dts.conv == 2 && ord != P.dts.convOrd && ord >= 0) { P.dts.convOrd = ord; P.dts.conv = 1; P.dts.convAt = video_time(); P.dts.convT0 = now_();
         int fl = conv_flags(ord); P.dts.copyA = !!(fl & HC_COPYAUDIO); video_unload(); P.live = 0; P.liveT0 = 0; hls_conv_start(P.url, ord, fl); fprintf(stderr, "[dts] audio track %d instead (phone)\n", ord); } }
-    else set_audio(atoi(id));
+    else { set_audio(atoi(id)); P.pvU |= 2; }
     refresh_tray(3); }
 }
 int player_cast_state(double *pos, double *du, char *title, int cap) {
@@ -1720,7 +1786,9 @@ static void finish_close(void) { sync_stop(0); gfx_target_free(&handSnap); mo_se
 static int closeNext, closeSim, closeArt; static double closeAt, closeT0; /* closeArt: closed on the loading screen (its line and words fade as the logo flies back) */
 static void close_player(int goNext, int goSim) {
   if (!P.open || P.closing) return; if (bestTok) { best_choose_cancel(bestTok); bestTok = 0; } P.closing = 1; closeArt = !P.live && P.artA.v > 0.999f; closeT0 = now_(); sx_begin_quick(0); /* the player's logo moves back to the page */ closeNext = goNext; closeSim = goSim; P.ssOn = 0; P.nx.tok = 0; P.sk.tok = 0;
-  save_progress(1); video_pause();
+  if (near_end()) { int up = up_next_ok(); mark_watched(); save_progress(!up); advance_up_next(); } /* (left in the credits: watched; the next episode is what Continue Watching offers) */
+  else save_progress(1);
+  video_pause();
   /* the title's own picture fades back over the paused frame, the video goes, then the cover fades onto the app */
   closeAt = now_() + (closeArt ? 0.01 : 0.26); /* the cover fades back over the paused frame (see css()); from the loading screen the art fades at once, under the logo on its way back */
 }
@@ -1990,7 +2058,7 @@ static void draw_art(void) {
 typedef struct { unsigned ser; int px; uint32_t col, ol; float bo; } SubStyle;
 static const SubStyle *sub_style(void) {
   static SubStyle st; if (st.ser == store_serial() && st.ser) return &st;
-  st.ser = store_serial(); st.px = (int)(38 * SUB_SIZES[size_idx()] / 100.0f + 0.5f); st.col = hexcol(store_get("subsColor", "#ffffff")); st.ol = hexcol(store_get("subsOutlineColor", "#000000")); st.bo = (float)atof(SUB_BGS[bg_idx()]);
+  st.ser = store_serial(); st.px = (int)(38 * SUB_SIZES[size_idx()] / 100.0f + 0.5f); st.col = subdim_rgb(hexcol(store_get("subsColor", "#ffffff")), dim_idx()); st.ol = hexcol(store_get("subsOutlineColor", "#000000")); st.bo = (float)atof(SUB_BGS[bg_idx()]);
   return &st;
 }
 /* the cue list's index, made once per list: whether it runs in start order, and the latest end so far at each cue */
@@ -2354,11 +2422,12 @@ static void draw_tray(void) {
         float tx = 6 + (it->tool ? 18 : 14); if (!it->tool) { if (it->spin) { float cx = tx + 12, cy = yy + h / 2; gfx_ring(cx - 11, cy - 11, 22, 22, 11, 3, WHITE_A(51)); float ph = clock_ph(0.9) * 6.2832f; for (int q = 0; q <= 8; q++) { float an = ph - 2.356f + 1.5708f * q / 8; gfx_circle(cx + cosf(an) * 9.5f, cy + sinf(an) * 9.5f, 1.5f, ACC2); } } /* chosen, its lines still loading: the notes' spinner in place of the tick */
           else if (item_on(it)) icon_draw("check", tx + 1, yy + h / 2 - 11, 22, col_alpha(ACC2, i == TM.onIdx[c] ? TM.chkA[c].v : 1)); tx += 24 + 12; }
         /* a value that cycles: its dots under it, the lit one gliding along; a value just changed fades up */
-        int dk = !it->tool ? 0 : !strcmp(it->u, "size") ? 1 : !strcmp(it->u, "color") ? 2 : !strcmp(it->u, "bg") ? 3 : !strcmp(it->u, "pos") ? 4 : 0; float va = TM.vkC == c && it->tool && !strcmp(TM.vkU, it->u) ? TM.vkA.v : 1, vy0 = dk ? -5 : 0;
+        int dk = !it->tool ? 0 : !strcmp(it->u, "size") ? 1 : !strcmp(it->u, "color") ? 2 : !strcmp(it->u, "bg") ? 3 : !strcmp(it->u, "pos") ? 4 : !strcmp(it->u, "dim") ? 5 : 0; float va = TM.vkC == c && it->tool && !strcmp(TM.vkU, it->u) ? TM.vkA.v : 1, vy0 = dk ? -5 : 0;
         float right = 6 + 232 - 18; if (dk == 2 || dk == 3) { swatch_draw(dk - 2, dk == 2 ? (color_idx() < 0 ? 0 : color_idx()) : bg_idx(), right - 13, yy + h / 2, 13); right -= 26 + 10; }
         if (it->vl[0]) { if (it->vw <= 0) it->vw = text_width(it->vl, 22, 700, 0); float vw = it->vw; text_draw(it->vl, right, yy + h / 2 - text_line_height(22) / 2.0f + vy0 + 6 * (1 - va), 22, 700, col_alpha(ACC3, va), 0, 0, ALIGN_RIGHT);
           if (dk == 1) cycle_dots(dk, 7, size_idx(), right, yy + h / 2 + 14, 9, 2.5f, WHITE_A(64), ACC3, 1);
           else if (dk == 4) cycle_dots(dk, SUBPOS_N, pos_idx(), right, yy + h / 2 + 14, 9, 2.5f, WHITE_A(64), ACC3, 1);
+          else if (dk == 5) cycle_dots(dk, SUBDIM_N, dim_idx(), right, yy + h / 2 + 14, 9, 2.5f, WHITE_A(64), ACC3, 1);
           right -= vw + 10; } if (it->sw) { gfx_circle(right - 9, yy + h / 2, 9, it->sw); gfx_ring(right - 18, yy + h / 2 - 9, 18, 18, 9, 2, BLACK_A(77)); right -= 18 + 10; }
         int px = it->tool ? 23 : 24;
         if (it->sub[0] && it->tool) { float ly = yy + 12; text_draw(it->lb, tx, ly, px, 700, WHITE_A(255), 0, right - tx - 4, ALIGN_LEFT); text_draw_wrapped(it->sub, tx, ly + px * 1.25f + 2, 6 + 232 - 18 - tx, 2, 21, 600, WHITE_A(184), 0, ALIGN_LEFT, 26); } /* Auto-sync: what it did, on up to two lines */

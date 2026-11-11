@@ -14,3 +14,8 @@ int cw_visible(const CwFacts *f) {
   if (f->durationMs > 0 && f->timeOffsetMs > f->durationMs * 0.96) return 0;   /* (as it was: past 96 % counts as finished) */
   return 1;
 }
+
+int cw_near_end(double d, double t, int outroHas, double outroS) {
+  if (d < 600 || t < 60 || t > d + 1) return 0;
+  return d - t <= CW_NEAR_END_S || (outroHas && outroS > d * 0.5 && outroS < d && t >= outroS);
+}

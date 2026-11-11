@@ -35,6 +35,8 @@
 static volatile double assRenderMs; /* the renders' running average, for Stats for nerds */
 double asssubs_render_ms(void) { return assRenderMs; }
 
+static float dimK = 1.0f;   /* the viewer's brightness for the subtitle colour (1 = as the script has it) */
+void asssubs_dim(float k) { dimK = k < 0.1f ? 0.1f : k > 1 ? 1 : k; }
 typedef struct { int x, y, w, h; uint32_t color; unsigned char *bm; } Piece;   /* bm: w*h alpha, tight */
 typedef struct { Piece *p; int n, posOnly; int fw, fh; } Frame;
 typedef struct Inst {
@@ -248,7 +250,7 @@ void asssubs_tick(double t, int playing, double fps, float vx, float vy, float v
 void asssubs_draw(void) {
   if (!cur || !shown.n || shown.fw <= 0) return;
   float kx = 1920.0f / shown.fw, ky = 1080.0f / shown.fh;
-  for (int i = 0; i < shown.n; i++) { Piece *p = &shown.p[i]; uint32_t c = ((uint32_t)(255 - (p->color & 0xff)) << 24) | (p->color >> 8); if (!(c >> 24)) continue;
+  for (int i = 0; i < shown.n; i++) { Piece *p = &shown.p[i]; uint32_t c = ((uint32_t)(255 - (p->color & 0xff)) << 24) | (p->color >> 8); if (!(c >> 24)) continue; if (dimK < 1.0f) { uint32_t r = (uint32_t)(((c >> 16) & 255) * dimK + .5f), g = (uint32_t)(((c >> 8) & 255) * dimK + .5f), b = (uint32_t)((c & 255) * dimK + .5f); c = (c & 0xff000000u) | (r << 16) | (g << 8) | b; }
     int tx = (p->w + TILE - 1) / TILE; if (tx > 2) tx = 2;
     for (int k = 0; k < shown.ns[i]; k++) { AtlasSlot *s = &shown.s[i * 4 + k];
       if (!atlas_valid(s)) { for (int j = 0; j < shown.ns[i]; j++) atlas_release(&shown.s[i * 4 + j]); upload(i); s = &shown.s[i * 4 + k]; if (k >= shown.ns[i] || !atlas_valid(s)) break; } /* its page was reused: in again */

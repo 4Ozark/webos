@@ -23,7 +23,7 @@ int main(void) {
   /* Font: "auto" is the app's own, as before; unknown values fall back to it */
   EXPECT_I("auto is index 0", subfont_index("auto"), 0); EXPECT_I("no value is auto", subfont_index(NULL), 0); EXPECT_I("junk is auto", subfont_index("comic"), 0);
   EXPECT_I("auto has no file", subfont_at(0)->file == NULL, 1);
-  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
+  const char *want[] = { "auto", "noto", "cairo", "tajawal", "roboto", "opensans", "arimo", "almarai", "amiri", "lato" }; for (int i = 0; i < SUBFONT_N; i++) { EXPECT_S("id", subfont_at(i)->id, want[i]); EXPECT_I("id round trip", subfont_index(subfont_at(i)->id), i); }
   EXPECT_I("bad font index is auto", subfont_at(77)->file == NULL, 1);
   for (int i = 1; i < SUBFONT_N; i++) { EXPECT_I("a font has a file", subfont_at(i)->file != NULL && subfont_at(i)->family != NULL, 1); EXPECT_I("a font covers some script", subfont_at(i)->latin || subfont_at(i)->arabic, 1); }
   /* which styled (ASS) tracks take the chosen font: only where it covers the track's script */
@@ -36,5 +36,16 @@ int main(void) {
   EXPECT_S("Noto Sans Arabic on an Arabic track", subfont_for_track("noto", "ar-SA")->family, "Noto Sans Arabic");
   EXPECT_S("unknown language counts as Latin", subfont_for_track("opensans", "")->family, "Open Sans"); EXPECT_S("no language counts as Latin", subfont_for_track("opensans", NULL)->family, "Open Sans");
   EXPECT_I("Urdu is Arabic script", subfont_arabic_lang("urd") || subfont_arabic_lang("ur"), 1); EXPECT_I("English is not", subfont_arabic_lang("eng"), 0);
+  /* brightness */
+  EXPECT_I("default dim index", subdim_index(NULL) == SUBDIM_DEFAULT && subdim_index("") == 0 && subdim_index("junk") == 0 && subdim_index("9") == 0, 1);
+  for (int i = 0; i < SUBDIM_N; i++) EXPECT_I("dim round trip", subdim_index(subdim_value(i)), i);
+  EXPECT_I("normal leaves the colour", subdim_rgb(0xffffffffu, 0) == 0xffffffffu, 1);
+  EXPECT_I("each step is dimmer", subdim_scale(1) < subdim_scale(0) && subdim_scale(2) < subdim_scale(1) && subdim_scale(3) < subdim_scale(2), 1);
+  EXPECT_I("white dim 3 is a grey", (subdim_rgb(0xffffffffu, 3) & 0xffffff) == 0x8c8c8c, 1);
+  EXPECT_I("alpha is kept", (subdim_rgb(0xffffffffu, 2) >> 24) == 0xff, 1);
+  EXPECT_I("black stays black", subdim_rgb(0xff000000u, 3) == 0xff000000u, 1);
+  EXPECT_I("a bad index is normal", subdim_scale(-1) == 1.0f && subdim_scale(99) == 1.0f, 1);
+  EXPECT_S("Arimo family", subfont_at(subfont_index("arimo"))->family, "Arimo"); EXPECT_I("Arimo has no Arabic, so an Arabic track keeps the app's font", subfont_for_track("arimo", "ara") == NULL, 1);
+  EXPECT_I("Amiri covers Arabic", subfont_for_track("amiri", "ar") != NULL, 1);
   printf("%d checks, %d failed\n", runs, fails); return fails ? 1 : 0;
 }

@@ -25,6 +25,10 @@ static const SubFont FONTS[SUBFONT_N] = {
   { "tajawal",  "Tajawal",          "Tajawal-Bold.ttf",   "Tajawal",          1, 1 },
   { "roboto",   "Roboto",           "Roboto.ttf",         "Roboto",           1, 0 },
   { "opensans", "Open Sans",        "OpenSans.ttf",       "Open Sans",        1, 0 },
+  { "arimo",    "Arimo (Arial)",    "Arimo.ttf",          "Arimo",            1, 0 },   /* Arial itself is not free to bundle; Arimo is drawn to the same measures */
+  { "almarai",  "Almarai",          "Almarai-Bold.ttf",   "Almarai",          1, 1 },
+  { "amiri",    "Amiri",            "Amiri.ttf",          "Amiri",            1, 1 },
+  { "lato",     "Lato",             "Lato-Bold.ttf",      "Lato",             1, 0 },
 };
 int subfont_index(const char *stored) {
   if (!stored || !*stored) return 0;
@@ -39,4 +43,21 @@ int subfont_arabic_lang(const char *lang) {
 const SubFont *subfont_for_track(const char *stored, const char *lang) {
   const SubFont *f = subfont_at(subfont_index(stored)); if (!f->file) return NULL;
   return (subfont_arabic_lang(lang) ? f->arabic : f->latin) ? f : NULL;
+}
+
+static const char *DIM_VAL[SUBDIM_N] = { "0", "1", "2", "3" };
+static const char *DIM_LB[SUBDIM_N]  = { "Normal", "Dim 1", "Dim 2", "Dim 3" };
+static const float DIM_SC[SUBDIM_N]  = { 1.0f, 0.85f, 0.70f, 0.55f };
+int subdim_index(const char *stored) {
+  if (!stored || !*stored) return SUBDIM_DEFAULT;
+  for (int i = 0; i < SUBDIM_N; i++) if (!strcmp(stored, DIM_VAL[i])) return i;
+  return SUBDIM_DEFAULT;
+}
+const char *subdim_value(int idx) { return DIM_VAL[idx < 0 || idx >= SUBDIM_N ? SUBDIM_DEFAULT : idx]; }
+const char *subdim_label(int idx) { return DIM_LB[idx < 0 || idx >= SUBDIM_N ? SUBDIM_DEFAULT : idx]; }
+float subdim_scale(int idx) { return DIM_SC[idx < 0 || idx >= SUBDIM_N ? SUBDIM_DEFAULT : idx]; }
+unsigned subdim_rgb(unsigned rgb, int idx) {
+  float s = subdim_scale(idx); if (s >= 1.0f) return rgb;
+  unsigned r = (unsigned)(((rgb >> 16) & 255) * s + 0.5f), g = (unsigned)(((rgb >> 8) & 255) * s + 0.5f), b = (unsigned)((rgb & 255) * s + 0.5f);
+  return (rgb & 0xff000000u) | (r << 16) | (g << 8) | b;
 }

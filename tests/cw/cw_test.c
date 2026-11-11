@@ -40,6 +40,18 @@ int main(void) {
   f = base(); f.isSeries = 1; f.videoIdIsEpisode = 1; f.timeOffsetMs = 90000; f.durationMs = 1500000; f.lastWatchedMs = NOW; EXPECT("next episode started", cw_up_next(&f), 0);
   EXPECT("next episode started shows", cw_visible(&f), 1);
 
+  /* leaving near the end counts as watched */
+  EXPECT("100 s left of 45 min", cw_near_end(2700, 2600, 0, 0), 1);
+  EXPECT("101 s left is not yet", cw_near_end(2700, 2599, 0, 0), 0);
+  EXPECT("a minute and a half left", cw_near_end(2700, 2610, 0, 0), 1);
+  EXPECT("half way", cw_near_end(2700, 1350, 0, 0), 0);
+  EXPECT("credits start known, past it", cw_near_end(2700, 2400, 1, 2380), 1);
+  EXPECT("credits start known, before it", cw_near_end(2700, 2300, 1, 2380), 0);
+  EXPECT("a credits start in the first half is not believed", cw_near_end(2700, 1000, 1, 900), 0);
+  EXPECT("a credits start past the end is not believed", cw_near_end(2700, 2500, 1, 2800), 0);
+  EXPECT("a short clip never counts", cw_near_end(300, 290, 0, 0), 0);
+  EXPECT("the first minute never counts", cw_near_end(620, 30, 0, 0), 0);
+  EXPECT("no duration", cw_near_end(0, 0, 0, 0), 0);
   printf("%d checks, %d failed\n", runs, fails);
   return fails ? 1 : 0;
 }
