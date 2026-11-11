@@ -43,7 +43,9 @@ static int ep_cmp(const void *a, const void *b) { const TmdbEp *x = a, *y = b; r
 /* the helper's JSON ({name, overview, genres, logo, poster, eps: {"s:e": [name, overview]}, lt}) -> a result */
 static Loc *loc_from_json(const cJSON *v) {
   Loc *l = calloc(1, sizeof *l);
-  l->name = dupe(js_str(v, "name", "")); l->overview = dupe(js_str(v, "overview", "")); l->logo = dupe(js_str(v, "logo", "")); l->poster = dupe(js_str(v, "poster", ""));
+  /* the title stays as the film has it: its name, its logo and its poster in English (they carry the title); only
+     the words around it (description, genres, episodes) come in the titles' language. "" here = the English stays */
+  l->name = dupe(""); l->overview = dupe(js_str(v, "overview", "")); l->logo = dupe(""); l->poster = dupe("");
   const cJSON *g; cJSON_ArrayForEach(g, js_arr(v, "genres")) if (cJSON_IsString(g) && l->pub.ngenres < 8) l->genres[l->pub.ngenres++] = dupe(g->valuestring);
   const cJSON *eps = js_obj(v, "eps"), *e; int n = cJSON_GetArraySize(eps), k = 0;
   if (n > 0) l->eps = calloc((size_t)n, sizeof *l->eps);
@@ -320,6 +322,7 @@ int tmdb_episode(const TmdbLoc *L, int season, int episode, const char **name, c
 static void set_str(cJSON *o, const char *k, const char *v) { cJSON *x = cJSON_GetObjectItemCaseSensitive(o, k); if (cJSON_IsString(x)) cJSON_SetValuestring(x, v); else { cJSON_DeleteItemFromObjectCaseSensitive(o, k); cJSON_AddStringToObject(o, k, v); } }
 void tmdb_apply_meta(cJSON *m, const TmdbLoc *L) {
   if (!m || !L) return;
+  cJSON_DeleteItemFromObjectCaseSensitive(m, "locName"); cJSON_DeleteItemFromObjectCaseSensitive(m, "locLogo"); cJSON_DeleteItemFromObjectCaseSensitive(m, "locPoster"); /* (the title stays English: one kept from before goes too) */
   const char *ul = i18n_content_lang(); if (!strcmp(js_str(m, "_loc", ""), ul)) return;
   if (!L->light) set_str(m, "_loc", ul); /* a row's lookup (no episodes): the page's still applies later */
   if (*L->name && strcmp(L->name, js_str(m, "name", ""))) set_str(m, "locName", L->name);
