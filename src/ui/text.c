@@ -1,4 +1,5 @@
 #include "platform/plat.h"
+#include "ui/runsplit.h"
 #include "ui/text.h"
 #include <SDL2/SDL.h>
 #include "ui/gfx.h"
@@ -408,7 +409,7 @@ static float shape_tag(Shaped *out, const uint32_t *cps, int a, int b, int px, f
 }
 static int strong_script(hb_script_t sc) { return sc && sc != HB_SCRIPT_COMMON && sc != HB_SCRIPT_INHERITED && sc != HB_SCRIPT_UNKNOWN; }
 /* the whole line: cps are logical order; returns total advance; fills `out` in visual order */
-static int run_covered(Font *f, const uint32_t *cps, int a, int b) { for (int k = a; k < b; k++) if (!is_ign(cps[k]) && !font_has(f, cps[k])) return 0; return 1; }
+static int ov_has(void *ctx, uint32_t c) { return is_ign(c) || font_has((Font *)ctx, c); }
 static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int weight, float tracking) {
   if (n <= 0) return 0;
   FriBidiCharType *types = malloc(n * sizeof *types); FriBidiBracketType *brk = malloc(n * sizeof *brk);
@@ -449,7 +450,10 @@ static float shape_line(Shaped *out, const uint32_t *cps, int n, int px, int wei
     Run *r = &runs[map[k]];
     if (r->fid == FID_TAG) { pen += shape_tag(out, cps, r->a, r->b, px, tracking, pen); continue; }
     Font *f = r->fid >= FAM_FB ? fb_font(r->fid - FAM_FB) : font_get(r->fid, weight); if (!f) f = font_get(FAM_LATIN, weight); if (!f) continue;
-    if (shapeFace && (r->fid == FAM_LATIN || r->fid == FAM_ARABIC)) { Font *o = ov_font(shapeFace, r->fid, weight); if (o && run_covered(o, cps, r->a, r->b)) f = o; } /* the viewer's subtitle font, for a run it has all of */
+    if (shapeFace && (r->fid == FAM_LATIN || r->fid == FAM_ARABIC)) { /* the viewer's subtitle font, for a run whose letters it has all of: the spaces, digits and marks it lacks (an Arabic-only font has none) go to the app's own font */
+      Font *o = ov_font(shapeFace, r->fid, weight); int pa[RS_MAX], pb[RS_MAX], pv[RS_MAX], np = o ? rs_split(cps, r->a, r->b, ov_has, o, pa, pb, pv) : 0;
+      if (np > 0) { int rtl = r->lv & 1; for (int q = 0; q < np; q++) { int w = rtl ? np - 1 - q : q; Font *pf = pv[w] ? o : f; /* (right to left runs go out last piece first) */
+          pen += shape_run(out, pf, cps, pa[w], pb[w], rtl, px, tracking, pen, r->sc, weight >= 600 && pf->fam >= FAM_FB); } continue; } }
     pen += shape_run(out, f, cps, r->a, r->b, r->lv & 1, px, tracking, pen, r->sc, weight >= 600 && f->fam >= FAM_FB);
   }
   free(types); free(brk); free(levels); free(runs); free(rl); free(map);
