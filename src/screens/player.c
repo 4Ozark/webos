@@ -125,7 +125,7 @@ static struct {
   double liveT0, steadyAt; /* the first frame came / playing steadily since */
   int ssOn; double ssAt, ssCheckAt, lastAct; double size; char sizeTxt[24]; unsigned sizeTok; int httpSt, sizeAns, canNext; double errAt; int lastVw, lastVh; double aspRefreshAt;
   /* the pointer: the time bubble over the bar */ int hvOn, barDown; float hvP; Mo hvA;
-  int extTry, embKnown, embWaitOver; double extRetryAt, embWaitAt;
+  int extTry, embKnown, embWaitOver, matchWaitOver; double extRetryAt, embWaitAt, matchWaitAt;
   /* the stream as its addon gave it (headers, group, file facts); the subtitles addons installed for this video, the
      language chosen in their tab */
   Stream st; int nSubAddons; char subLang[24]; unsigned ytTok;
@@ -434,6 +434,20 @@ static void auto_sub(void) {
   int em = -1; for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (em < 0 || (P.emb[em].forced && !P.emb[j].forced))) em = j;
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
+  if (best_max_on()) { /* "Top quality, matching subtitles": of the ones in this language, the one made for this release */
+    char rel[1100]; snprintf(rel, sizeof rel, "%s", P.st.filename[0] ? P.st.filename : P.st.title);
+    SubEntry *pick = NULL; int kind = 0, top = -1000000;
+    for (int li = 1; li <= 2; li++) { SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx;
+      for (int i = 0; i < n; i++) { SubEntry *e = &l[i]; if (!lang_match(e->lang, w)) continue;
+        char from[200]; snprintf(from, sizeof from, "%s %s", e->addon, e->label); for (char *c = from; *c; c++) *c = (char)tolower((unsigned char)*c);
+        int sc = e->hm ? 1000 : best_sub_fit(rel, e->rel[0] ? e->rel : e->label); /* found by the file's hash: made for this very file */
+        if (strstr(from, "subdl") || strstr(from, "subsource")) sc += 8;
+        if (sc > top) { top = sc; pick = e; kind = li; } } }
+    /* the lists come in one by one: until all are in (10 s at most), unless one was found by the file's hash */
+    if (top < 1000 && (P.extLoading || P.adxLoading) && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
+    if (pick) { fprintf(stderr, "[subs] matching the release \"%.80s\": %s (%s, fit %d)\n", rel, pick->rel[0] ? pick->rel : pick->label, pick->addon, top);
+      P.autoSubDone = 1; set_ext_sub(kind, pick); sync_auto_arm(); }
+    return; }
   for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
   for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
 }
@@ -1952,6 +1966,7 @@ void player_tick(float dt) {
   if (P.extRetryAt && now_() >= P.extRetryAt) { P.extRetryAt = 0; load_ext_subs(P.extTry + 1); }
   if (P.adxRetryAt && now_() >= P.adxRetryAt) { P.adxRetryAt = 0; load_addon_subs(P.adxTry + 1); }
   if (P.embWaitAt && !P.embWaitOver && now_() >= P.embWaitAt) { P.embWaitOver = 1; auto_sub(); }
+  if (P.matchWaitAt && !P.matchWaitOver && now_() >= P.matchWaitAt) { P.matchWaitOver = 1; auto_sub(); }
   sub_check(); ass_sync();
   sk_tick(); loc_apply();
   if (P.started && !P.ldd && dur() > 0) P.ldd = 1; /* the length is known: the loading line fades before the picture comes */
