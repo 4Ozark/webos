@@ -383,8 +383,8 @@ static void ass_sync(void) {
   asssubs_tick(video_time() - P.subDelay, vs == VID_PLAYING && !video_settling(), video_fps(), vx, vy, vw, vh, w, h, SUB_SIZES[size_idx()] / 100.0f, sub_pos_off());
 }
 static void sync_auto_arm(void);
-/* the delay as shown: tenths (the step), hundredths only for a value kept from before (0.25 s steps) */
-static const char *dly_fmt(double v, int bare) { double t = fabs(v) * 10; int tenths = fabs(t - floor(t + 0.5)) < 1e-6; return bare ? (tenths ? "%s%.1f" : "%s%.2f") : (tenths ? "%s%.1f s" : "%s%.2f s"); }
+/* the delay as shown: hundredths (the step) */
+static const char *dly_fmt(double v, int bare) { (void)v; return bare ? "%s%.2f" : "%s%.2f s"; }
 /* ---- what the viewer chose for this title is kept (store key "pv", by the video's id: the same for any source, a torrent too) and
    comes back the next time it opens: the subtitle (off, one of the file's own by language, or the very file from an addon), the
    audio language and the subtitle delay. Only what the viewer changed is kept; the rest stays automatic. ---- */
@@ -1441,10 +1441,11 @@ static void dly_draw(void);
 /* ---- the delay card: the subtitles' timing set while watching. A small card at the top with - and + (a quarter of a
    second each), the delay between them, play / pause and Done; the picture and the lines stay in view, so a change is
    seen at once. Back or Done closes it (mode 4) ---- */
-#define DLY_STEP 0.1   /* each press: a tenth of a second */
+#define DLY_STEP 0.01  /* each press: a hundredth of a second (the first from 0: DLY_FIRST) */
+#define DLY_FIRST 0.1
 static void dly_open(void) { close_tray(); P.osd = 0; P.mode = 4; P.dlyF = 0; mo_set(&P.dlyR, 0); mo_to(&P.dlyA, 1, .28f, C_OUT, 0); }
 static void dly_close(void) { P.mode = 0; mo_to(&P.dlyA, 0, .2f, C_EASE, 0); }
-static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay + d; v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
+static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay == 0 ? (d > 0 ? DLY_FIRST : -DLY_FIRST) : P.subDelay + d; /* 0, 0.10, 0.11, 0.12, ... (and below 0 the same) */ v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
 static void dly_act(int i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0);
   if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close(); }
 static void dly_key(int k) {
@@ -2560,7 +2561,7 @@ static void dly_draw(void) {
     else if (i == 2) icon_draw(paused() ? "p_play" : "p_pause", bx[i] + B / 2 - 17, cy - 17, 34, c);
     else text_draw(dn, bx[i] + bw[i] / 2, cy - text_line_height(26) / 2.0f, 26, 700, c, 0, 0, ALIGN_CENTER); }
   /* the delay: large, a small lift when it changes; under it what it means */
-  { char v[32]; if (P.subDelay == 0) snprintf(v, sizeof v, "0.0 s"); else snprintf(v, sizeof v, dly_fmt(P.subDelay, 0), P.subDelay > 0 ? "+" : "\xe2\x88\x92", fabs(P.subDelay));
+  { char v[32]; if (P.subDelay == 0) snprintf(v, sizeof v, "0.00 s"); else snprintf(v, sizeof v, dly_fmt(P.subDelay, 0), P.subDelay > 0 ? "+" : "\xe2\x88\x92", fabs(P.subDelay));
     float e = (float)((now_() - P.dlyAt) / 0.22); e = e < 0 ? 0 : e > 1 ? 1 : e; float lift = 6 * (1 - ease_apply(EASE_OUT, e));
     text_draw(v, vx + VW / 2, cy - 30 - lift, 40, 800, WHITE_A(255), -0.4f, 0, ALIGN_CENTER);
     const char *m = P.subDelay > 0 ? T("Subtitles later") : P.subDelay < 0 ? T("Subtitles earlier") : T("Subtitle delay");
