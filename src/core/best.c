@@ -218,16 +218,28 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   if ((dts && cdts) || (thd && c->truehd)) sc += 16; /* the TV decodes the special track: the best sound it can give */
   else if (dts || thd) sc -= 45;                       /* the file's other tracks have to stand in */
   else if (!strcmp(a0, "EAC3")) sc += 14; else if (!strcmp(a0, "AC3")) sc += 12; else if (!strcmp(a0, "AAC")) sc += 8; else if (!strcmp(a0, "Opus") || !strcmp(a0, "FLAC")) sc -= 15;
-  if (strstr(au, "Atmos")) sc += maxMode ? 30 : 6;
-  if (maxMode && dv && c->dv) sc += 40; /* top quality: the TV's own Dolby Vision and Atmos ahead of everything at the same resolution */
+  if (strstr(au, "Atmos")) sc += 6;
   if (has_word(l, "av1") && !c->av1) sc -= 200; /* nothing to fall back to: the picture won't decode */
   sc += lang_score(t, l); /* the user's languages (settings) */
   double mb = size_mb(t), need = mb ? mb * 8 / (dur * 60) : by_res(rr, 22, 12, 8, 4, 2);
-  if (mb) sc += fmin(maxMode ? 40 : 18, need / by_res(rr, 20, 10, 6, 3, 1.5) * 8); /* more bitrate for the same picture: better */
+  if (mb) sc += fmin(18, need / by_res(rr, 20, 10, 6, 3, 1.5) * 8); /* more bitrate for the same picture: better */
   double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 1.5 : 4) : line; /* a swarm gives roughly 1.5 Mbps a seed */
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
   if (!o) return 1;
   o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; if (resOut) *resOut = r;
+  /* top quality, in this order (each only between streams equal in the ones before):
+     1. picture and source: 4K Remux, 4K BluRay, 4K WEB-DL, 4K WEBRip, (4K, source not named), then the same at 1080p, HDTV, lower
+     2. HDR: Dolby Vision (on a TV with it; without, a file that has HDR10 under it counts as HDR10), HDR10+, HDR10, HLG, none
+     3. sound as this TV plays it: TrueHD Atmos, DTS:X / DTS-HD MA, DD+ Atmos, DD+, AC3, AAC. A track the TV can't
+        decode is played converted to AC3 5.1, so it counts as that */
+  { int src = strstr(l, "remux") ? 5 : (strstr(l, "bluray") || strstr(l, "blu ray") || strstr(l, "bdrip") || strstr(l, "brrip")) ? 4
+      : (strstr(l, "webdl") || strstr(l, "web dl") || (has_word(l, "web") && !strstr(l, "webrip"))) ? 3 : (strstr(l, "webrip") || strstr(l, "web rip")) ? 2 : strstr(l, "hdtv") ? 0 : 1;
+    int tier = r >= 2160 ? 20 + src : r >= 1440 ? 15 + src : r >= 1080 ? 10 + src : r >= 720 ? 5 : 1;
+    int hr = 1; if (dv && c->dv) hr = 5; else if (strstr(hd, "HDR10+")) hr = 4; else if (strstr(hd, "HDR10") || strstr(hd, "HDR")) hr = 3; else if (strstr(hd, "HLG")) hr = 2; else if (dv) hr = 0; /* (Dolby Vision alone on a TV without it: wrong colours) */
+    int atm = strstr(au, "Atmos") != NULL, ar = 1;
+    if (thd) ar = c->truehd ? (atm ? 7 : 6) : 3; else if (!strncmp(au, "DTS:X", 5) || !strncmp(au, "DTS-HD MA", 9)) ar = cdts ? 6 : 3; else if (dts) ar = cdts ? 4 : 3;
+    else if (!strcmp(a0, "EAC3")) ar = atm ? 5 : 4; else if (!strcmp(a0, "AC3")) ar = 3; else if (!strcmp(a0, "AAC")) ar = 2;
+    o->key = (long)tier * 100 + hr * 10 + ar; }
   /* the summary: "4K  ·  DV HDR10  ·  EAC3 Atmos 5.1  ·  29.3 GB  ·  484 seeds" */
   char parts[5][48]; int np = 0;
   if (*rl) snprintf(parts[np++], 48, "%s", rl);
@@ -254,6 +266,8 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
   int mx = c->maxRes ? c->maxRes : 1080, fits = 1;
 #ifndef SB_BEST_PURE
   maxMode = best_max_on(); if (maxMode) fits = 0; /* top quality: the line's speed is not asked */
+#else
+  maxMode = getenv("SB_BEST_MAX") != NULL; if (maxMode) fits = 0; /* (the scoring test) */
 #endif
   BestRate *rs = n > 0 ? malloc(n * sizeof *rs) : NULL; int *tk = n > 0 ? malloc(n * sizeof *tk) : NULL, m = 0;
   for (int i = 0; i < n; i++) { int res = 0; if (!list[i] || !list[i]->url[0] || !rate(list[i], c, mbps, durMin, &rs[m], &res)) continue; tk[m++] = res == mx ? 0 : 1 + (mx - res); }
@@ -263,6 +277,7 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
     int next = -1; for (int i = 0; i < m; i++) if (tk[i] > cur && (next < 0 || tk[i] < next)) next = tk[i];
     if (next < 0) { done = 1; break; } cur = next;
     for (int i = 0; i < m; i++) if (tk[i] == cur && (!fits || rs[i].need * 1.3 <= rs[i].cap) && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && rs[i].sc > best->sc))) best = &rs[i];
+    if (maxMode) { best = NULL; for (int i = 0; i < m; i++) if (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && (rs[i].key > best->key || (rs[i].key == best->key && rs[i].sc > best->sc)))) best = &rs[i]; break; } /* top quality: the order above, over everything that plays here; then the surest (debrid, seeds) */
   }
   if (!best && m) { int top = tk[0]; for (int i = 1; i < m; i++) if (tk[i] < top) top = tk[i];
     for (int i = 0; i < m; i++) if (tk[i] == top && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && (rs[i].need < best->need || (rs[i].need == best->need && rs[i].sc > best->sc))))) best = &rs[i]; }
@@ -303,7 +318,8 @@ int best_dts_mode(void) { return 0; } /* the scoring test: Auto, as the web app 
 #endif
 #ifndef SB_BEST_PURE
 int best_on(void) { return !strcmp(store_get("autoBest", "false"), "true"); }
-int best_max_on(void) { return best_on() && !strcmp(store_get("bestMax", "false"), "true"); }
+int best_max_on(void) { return !strcmp(store_get("bestMax", "false"), "true"); }
+int best_play_on(void) { return best_on() || best_max_on(); }
 int best_dur(const cJSON *meta, const char *type) {
   const cJSON *rt = meta ? cJSON_GetObjectItemCaseSensitive(meta, "runtime") : NULL; char b[64] = "";
   if (cJSON_IsString(rt) && rt->valuestring) snprintf(b, sizeof b, "%s", rt->valuestring); else if (cJSON_IsNumber(rt)) snprintf(b, sizeof b, "%g", rt->valuedouble);

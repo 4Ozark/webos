@@ -207,7 +207,7 @@ static int eye_ep(const char **lbl, const char **icon, float *w) {
   Item ep; if (!revpanel_page_episode(&ep)) return 0; int on = lib_is_marked_watched(&ep);
   *lbl = T(on ? "Mark episode as unwatched" : "Mark episode as watched"); *icon = on ? "eyeOff" : "eye"; *w = text_width(*lbl, 26, 600, 0); return 1; }
 static void btn_act(int kind) {
-  if (kind == B_PLAY) { if (best_on()) play_best(); else { char vid[80]; if (play_target(vid, sizeof vid)) detail_open_streams(vid); } }
+  if (kind == B_PLAY) { if (best_play_on()) play_best(); else { char vid[80]; if (play_target(vid, sizeof vid)) detail_open_streams(vid); } }
   else if (kind == B_TRAILER) detail_trailer(D.p.it.type, ID(), mname());
   else if (kind == B_SIMILAR) { DetailParams p; memset(&p, 0, sizeof p); p.it = meta_item(); app_go(SCR_SIM, &p, 0); }
   else if (kind == B_LIB) { Item it = meta_item(); int was = lib_has(it.id); sound_play(SND_TOGGLE); cwmenu_fx_lib(!was, &it); lib_toggle(&it); app_refresh_boards(); } /* the chip, as from a card's menu */
@@ -429,7 +429,7 @@ static const Item *focused(void) {
 static void not_aired(const char *vid);
 static void open_ep(const Item *it) { /* a short OK on an episode (the app's press path): as the key does */
   for (int i = 0; i < D.neps; i++) if (!strcmp(js_str(D.eps[i], "id", ""), it->videoId) && unreleased(D.eps[i])) { not_aired(it->videoId); return; }
-  if (best_on()) play_best_vid(it->videoId); else detail_open_streams(it->videoId); }
+  if (best_play_on()) play_best_vid(it->videoId); else detail_open_streams(it->videoId); }
 static void nudge_btn(int k) { nudge_start(&D.nudge, k); }
 /* OK on an episode that has not aired: its streams open as usual, and where they would say none was found, the first time ever one light line (how many still come before it, its
    date, or that nobody knows yet); after that, just its date */
@@ -452,7 +452,7 @@ static int key_in(int k) {
     if (k == K_RIGHT) D.btnIdx = D.btnIdx + 1 < D.nbtn ? D.btnIdx + 1 : D.btnIdx;
     else if (k == K_LEFT) D.btnIdx = D.btnIdx > 0 ? D.btnIdx - 1 : 0;
     else if (k == K_UP) { if (D.nppl) { D.zone = 3; D.pRingEnter = 1; timer_start(&D.pRingPop, 0.2f); paint(); return 1; } topnav_focus(); return 1; } /* Up: the people, then the top tabs */
-    else if (k == K_OK) { if (D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_on()) { if (!D.playHold) { D.playHold = 1; D.holdSwell = 0; D.playHoldAt = app_now(); } } /* Play: a tap plays, a hold opens all the streams (on release or when full) */
+    else if (k == K_OK) { if (D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_play_on()) { if (!D.playHold) { D.playHold = 1; D.holdSwell = 0; D.playHoldAt = app_now(); } } /* Play: a tap plays, a hold opens all the streams (on release or when full) */
       else { fpill_press(&D.pill); if (D.btnIdx < D.nbtn) btn_act(D.btn[D.btnIdx].kind); } }
     else if (k == K_DOWN) { if (is_series()) { if (D.nseasons) D.zone = 1; else nudge_btn(K_DOWN); } else { char im[32]; if (imdb_of(im, sizeof im)[0]) { Item it = meta_item(); sound_focus(); D.pageZone = 0; revpanel_show_page(&it); } else nudge_btn(K_DOWN); return 1; } } /* (best stream on: Play holds the streams, Down brings the reviews up) */ /* film: Down re-opens the streams sheet */
     else if (k == K_BACK) return 0;
@@ -474,7 +474,7 @@ static int key_in(int k) {
   if (k == K_RIGHT) D.epIdx = D.epIdx + 1 < D.neps ? D.epIdx + 1 : D.epIdx;
   else if (k == K_LEFT) D.epIdx = D.epIdx > 0 ? D.epIdx - 1 : 0;
   else if (k == K_UP) D.zone = 1;
-  else if (k == K_OK) { if (D.epIdx < D.neps) { const char *v = js_str(D.eps[D.epIdx], "id", ""); if (unreleased(D.eps[D.epIdx])) { not_aired(v); return 1; } if (best_on()) { if (!D.epHold) { D.epHold = 1; D.epSwell = 0; D.epHoldAt = app_now(); snprintf(D.epVid, sizeof D.epVid, "%s", v); } } else detail_open_streams(v); return 1; } } /* best stream on: a tap plays it, a hold opens its streams */
+  else if (k == K_OK) { if (D.epIdx < D.neps) { const char *v = js_str(D.eps[D.epIdx], "id", ""); if (unreleased(D.eps[D.epIdx])) { not_aired(v); return 1; } if (best_play_on()) { if (!D.epHold) { D.epHold = 1; D.epSwell = 0; D.epHoldAt = app_now(); snprintf(D.epVid, sizeof D.epVid, "%s", v); } } else detail_open_streams(v); return 1; } } /* best stream on: a tap plays it, a hold opens its streams */
   else if ((k == K_YELLOW || k == K_BLUE) && D.epIdx < D.neps) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_play(SND_TOGGLE); lib_toggle_watched(&it, js_arr(D.meta, "videos")); app_refresh_boards(); detail_refresh_watched();
       toast(T(lib_is_marked_watched(&it) ? "Marked as watched" : "Marked as unwatched"), 1800, NULL); } return 1; } /* the yellow or blue key: this episode watched, or not */
   else if (k == K_DOWN && D.epIdx < D.neps) { char im[32]; if (imdb_of(im, sizeof im)[0]) { const Item *fi = focused(); if (fi) { Item it = *fi; sound_focus(); D.pageZone = 2; revpanel_show_page(&it); return 1; } } } /* Down: this episode's reviews, risen into the page as a film's */
@@ -552,7 +552,7 @@ static void draw_btns(float lx, int rtl) {
     if (b->la.v > 0.001f) { float hk = b->kind == B_PLAY ? D.lblA.v : 0; gfx_opacity_push(b->la.v * (1 - hk)); text_draw(lbl, rtl ? x + BD - 66 + fo : x + 66 + fo, (BD - text_line_height(26)) / 2 + fy, 26, 600, fg, 0, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT); gfx_opacity_pop();
       if (hk > 0.001f) { gfx_opacity_push(b->la.v * hk); text_draw(T("Hold for streams"), rtl ? x + BD - 66 + fo : x + 66 + fo, (BD - text_line_height(26)) / 2 + fy, 26, 600, fg, 0, 0, rtl ? ALIGN_RIGHT : ALIGN_LEFT); gfx_opacity_pop(); } } }
   /* resting on Play with the best stream on: how to reach every stream, after the row */
-  { int on = D.zone == 0 && (revpanel_page_k() <= 0 || revpanel_page_btns()) && D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_on() && !D.playHold && D.hk.v < 0.01f && app_now() - D.btn[D.btnIdx].fAt > 1.2;
+  { int on = D.zone == 0 && (revpanel_page_k() <= 0 || revpanel_page_btns()) && D.btnIdx < D.nbtn && D.btn[D.btnIdx].kind == B_PLAY && best_play_on() && !D.playHold && D.hk.v < 0.01f && app_now() - D.btn[D.btnIdx].fAt > 1.2;
     tween_to(&D.hintA, on ? 1 : 0, on ? 0.4f : 0.2f, EASE_IN_OUT); tween_tick(&D.hintA, app_dt()); /* in slowly, away quickly, never cut */
     if (D.hintA.v > 0.002f) { const Btn *lb = &D.btn[D.nbtn - 1]; float end = lb->x.v + (lb->f ? BD + DC.btnW[lb->kind] + 26 : BD) + 28;
       gfx_opacity_push(D.hintA.v); gfx_offset_push((rtl ? 1 : -1) * 10 * (1 - D.hintA.v), 0); key_hint(rtl ? lx - end : lx + end, BD / 2, K_OK, T("Hold for streams"), WHITE_A(170), rtl); gfx_offset_pop(); gfx_opacity_pop(); } }
@@ -607,7 +607,7 @@ static void ep_hint(float x, float y, int rtl) {
   static char tx[2][96]; static float tw[2]; static unsigned lg; if (lg != i18n_gen() || !tx[0][0]) { lg = i18n_gen(); snprintf(tx[0], sizeof tx[0], "%s", T("Episode reviews")); snprintf(tx[1], sizeof tx[1], "%s", T("Hold for streams"));
     for (int i = 0; i < 2; i++) tw[i] = text_width(tx[i], 22, 600, 0.2f) + 30; } /* (the key is drawn on its own, moving) */
   /* best stream on: the two ways on, in turn every 3.5 s (OK held for its streams first, then Down for its reviews), crossfading */
-  float m = 0; if (best_on()) { float ph = (float)fmod(t, 7.0); m = ph < 3.15f ? 0 : ph < 3.5f ? (ph - 3.15f) / 0.35f : ph < 6.65f ? 1 : 1 - (ph - 6.65f) / 0.35f; m = m * m * (3 - 2 * m); m = 1 - m; } /* (Hold for streams first, then Episode reviews) */
+  float m = 0; if (best_play_on()) { float ph = (float)fmod(t, 7.0); m = ph < 3.15f ? 0 : ph < 3.5f ? (ph - 3.15f) / 0.35f : ph < 6.65f ? 1 : 1 - (ph - 6.65f) / 0.35f; m = m * m * (3 - 2 * m); m = 1 - m; } /* (Hold for streams first, then Episode reviews) */
   float h = 14 + text_line_height(22), w = tw[0] + (tw[1] - tw[0]) * m + 30, bx = rtl ? x + 16 : x + 589 - 16 - w, by = y + 331 - 30 - h + 6 * (1 - a);
   float br = 0.5f - 0.5f * cosf((float)(t * 6.2832 / 3.6)); /* the breath: 3.6 s, slow */
   gfx_opacity_push(a * (0.9f + 0.1f * br));
@@ -773,5 +773,5 @@ static int key(int k) {
   if (z != D.zone || b != D.btnIdx || p != D.pIdx || se != D.seasonIdx || e != D.epIdx) sound_focus();
   return r;
 }
-static const Item *focused_menu(void) { return best_on() && D.zone == 2 ? NULL : focused(); } /* best stream on: holding an episode is its streams, not its menu */
+static const Item *focused_menu(void) { return best_play_on() && D.zone == 2 ? NULL : focused(); } /* best stream on: holding an episode is its streams, not its menu */
 Screen detailScreen = { enter, leave, key, tick, draw, focused_menu, open_ep, NULL, origin, out };

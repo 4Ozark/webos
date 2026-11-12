@@ -29,16 +29,18 @@ void best_speed_run(void (*cb)(int ok, double mbps, void *ud), void *ud);
 void best_speed_cancel(void);          /* stops the downloads; cb is not called */
 
 int  best_on(void);                    /* the setting */
-/* Settings > Playback > "Top quality, matching subtitles" (bestMax, under the best stream): the best picture and
-   sound first (4K, Dolby Vision, Atmos, remux) whatever the measured speed, and the subtitle made for that release */
+/* Settings > Playback > "Top quality, matching subtitles" (bestMax), a switch of its own: Play starts the stream
+   with the best picture and sound, in a fixed order (picture and source, then HDR, then sound: best_pick) whatever
+   the measured speed, with the subtitle made for that release */
 int  best_max_on(void);
+int  best_play_on(void);   /* Play starts a stream by itself: the best stream, or the top quality */
 /* how well a subtitle's release name (sub) fits the stream's (stream: its file name, else its title): the same
    release group most of all, then the same source (BluRay / WEB-DL / WEBRip / HDTV), streaming service and cut
    (Extended, IMAX...: another cut is another timing), resolution. 0 when nothing tells; below 0 when they differ */
 int  best_sub_fit(const char *stream, const char *sub);
 
 /* ---- the score (pure: no state, unit-testable) ---- */
-typedef struct { const Stream *s; double sc, need, cap; int mute; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it */
+typedef struct { const Stream *s; double sc, need, cap; int mute; long key; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it */
 /* 0 = the stream is left out (a cam, an uncached debrid file, a thin swarm, above the panel) */
 int  best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, BestRate *out);
 /* the pick among n streams: the panel's own resolution first, then lower ones, each only among streams the line
