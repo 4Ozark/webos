@@ -1460,8 +1460,19 @@ static void dly_draw(void);
 static void dly_open(void) { close_tray(); P.osd = 0; P.mode = 4; P.dlyF = 0; mo_set(&P.dlyR, 0); mo_to(&P.dlyA, 1, .28f, C_OUT, 0); }
 static void dly_close(void) { P.mode = 0; mo_to(&P.dlyA, 0, .2f, C_EASE, 0); }
 static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay == 0 ? (d > 0 ? DLY_FIRST : -DLY_FIRST) : P.subDelay + d; /* 0, 0.10, 0.11, 0.12, ... (and below 0 the same) */ v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
+/* − and + held down (OK, or the pointer's button): one step at once, then after a moment they go on by themselves,
+   faster the longer they are held (a hundredth at a time, then a tenth), until let go */
+static struct { int on, btn, ptr; double t0, next; } DH;
 static void dly_act(int i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0);
-  if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close(); }
+  if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close();
+  if (i <= 1) { DH.on = 1; DH.ptr = 0; DH.btn = i; DH.t0 = now_(); DH.next = DH.t0 + 0.45; } }
+static void dly_hold_tick(void) {
+  if (!DH.on) return;
+  if (P.mode != 4 || P.dlyF != DH.btn || (!DH.ptr && !app_ok_down())) { DH.on = DH.ptr = 0; return; }
+  double t = now_(); int n = 0;
+  while (t >= DH.next && n++ < 4) { double held = t - DH.t0, step = held > 4.0 ? 0.1 : DLY_STEP; dly_change(DH.btn ? step : -step);
+    DH.next += held > 4.0 ? 0.09 : held > 1.6 ? 0.05 : 0.11; }
+  if (t > DH.next) DH.next = t; }
 static void dly_key(int k) {
   if (k == K_LEFT) { if (P.dlyF > 0) { P.dlyF--; mo_to(&P.dlyR, (float)P.dlyF, .18f, C_OUT, 0); } else nudge_start(&P.nudge, k); }
   else if (k == K_RIGHT) { if (P.dlyF < 3) { P.dlyF++; mo_to(&P.dlyR, (float)P.dlyF, .18f, C_OUT, 0); } else nudge_start(&P.nudge, k); }
@@ -1934,7 +1945,7 @@ static void foc_update(void) {
 void player_tick(float dt) {
   hand_tick(dt);
   subs_pump(); /* subtitle files and lists, fetched on their own threads */
-  if (!P.open) return; video_pump(); sync_tick();
+  if (!P.open) return; video_pump(); sync_tick(); dly_hold_tick();
   css();
   Mo *mo[] = { &P.pgA, &P.pgY, &P.in, &P.artA, &P.ttlA, &P.ttlX, &P.ttlY, &P.barA, &P.barY, &P.btnA, &P.btnY, &P.topR, &P.topY, &P.dim, &P.dimT, &P.vig, &P.pzA, &P.bufA, &P.lnA, &P.skA, &P.skS, &P.knA,
     &P.prA, &P.prY, &P.prB, &P.subB, &P.ccS, &P.dlyA, &P.dlyR, &P.p2pA, &P.focX, &P.focY, &P.focW, &P.focH, &P.focA, &P.tipA, &P.hvA, &P.tray.open, &P.tray.openA, &P.tray.rowX, &P.tray.tabsX, &P.tray.ringX, &P.tray.ringY, &P.tray.ringA, &RL.t };
@@ -2518,10 +2529,11 @@ void player_ptr(int type, float x, float y) {
   if (!P.open || P.closing || !P.live) return; /* the art is up (resolving): nothing to point at */
   float L25 = text_line_height(25), barTop = SB_H - 54 - 94 - 30 - L25; /* the bar's row, its times included (the track alone is a few pixels high) */
   int onBar = y >= barTop && y <= barTop + L25, onBtns = y >= SB_H - 54 - 94 && y <= SB_H - 54;
+  if (type == 2) DH.on = DH.ptr = 0; /* (the pointer's button let go: a held − or + stops) */
   if (type == 2) { if (P.barDown && onBar) { ptr_hv(1, x); double d = dur(); if (d > 0) { P.seekT = P.hvP * d; commit_seek(); } } P.barDown = 0; return; } /* the bar seeks on release, where the pointer is then */
   int down = type == 1;
   if (P.mode == 4) { /* the delay card: its buttons; elsewhere the picture stays as it is */
-    if (DG.h > 0 && y >= DG.y && y <= DG.y + DG.h) for (int i = 0; i < 4; i++) if (x >= DG.x[i] && x <= DG.x[i] + DG.w[i]) { if (P.dlyF != i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0); } if (down) dly_act(i); return; }
+    if (DG.h > 0 && y >= DG.y && y <= DG.y + DG.h) for (int i = 0; i < 4; i++) if (x >= DG.x[i] && x <= DG.x[i] + DG.w[i]) { if (P.dlyF != i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0); } if (down) { dly_act(i); if (DH.on) DH.ptr = 1; } return; }
     return; }
   if (P.mode == 2) {
     if (PG.tray && in_box(x, y, PG.x, PG.y, PG.w, PG.h)) { ptr_tray(x, y, down); return; }
