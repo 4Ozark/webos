@@ -163,7 +163,7 @@ static void caps_known(const TvCaps *c, void *ud) { (void)c; (void)ud; play_layo
 static void build(void) {
   set_s(&playBase[0], "seekStep", "Seek step", "How far Left / Right jumps in the player", SEEK, 5, "10");
   set_s(&playBase[1], "bingeWatch", "Auto-play next episode", "When an episode ends, the next one starts", OO, 2, "true");
-  set_s(&playBase[9], "autoSkipIntro", "Skip intro and recap by themselves", "Off: the button stays until you press it or the part ends", OO, 2, "false");
+  set_s(&playBase[9], "autoSkipIntro", "Skip intro and recap by themselves", "Off: the button fills up, then waits for you to press it", OO, 2, "false");
   set_s(&playBase[2], "aspectMode", "Picture size", "Original, fill the screen or zoom", ASPECT, 3, "fit");
   set_s(&playBase[3], "bgTrailer", "Background trailers", "A trailer plays behind Home after a few seconds", OO, 2, "true");
   set_s(&playBase[4], "autoBest", "Play the best stream automatically", "", OO, 2, "false");
