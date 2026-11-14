@@ -64,7 +64,7 @@ static void rebuild(void) {
     for (int i = 0; i < S.groups[g].n && n < MAXITEMS - 1; i++) { const Stream *s = &S.groups[g].items[i]; S.items[n] = s; S.itemGroup[n] = g; S.kind[n] = S.groups[g].resume ? R_RESUME : R_PLAIN;
       nw[n] = was_seen(s) ? 0 : now; n++; } } /* rows new to the list fade in (never pop) */
   /* best stream on: the pick for this TV right after the resume row */
-  if (best_on() && S.filter < 0 && n) { const Stream *list[MAXITEMS]; int m = 0; for (int i = 0; i < n; i++) if (S.kind[i] == R_PLAIN) list[m++] = S.items[i];
+  if (best_play_on() && S.filter < 0 && n) { const Stream *list[MAXITEMS]; int m = 0; for (int i = 0; i < n; i++) if (S.kind[i] == R_PLAIN) list[m++] = S.items[i];
     BestRate r; const Stream *b = m ? best_pick(list, m, best_dur(sb_meta_cached(S.type, S.id), S.type), NULL, -1, &r) : NULL;
     if (b) { int at = S.kind[0] == R_RESUME ? 1 : 0; memmove(S.items + at + 1, S.items + at, (n - at) * sizeof *S.items); memmove(S.itemGroup + at + 1, S.itemGroup + at, (n - at) * sizeof *S.itemGroup);
       memmove(S.kind + at + 1, S.kind + at, (n - at) * sizeof *S.kind); memmove(nw + at + 1, nw + at, (n - at) * sizeof *nw);

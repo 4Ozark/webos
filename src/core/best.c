@@ -196,6 +196,7 @@ static int lang_score(const char *raw, const char *l) { int ia = lang_index(pref
   if (ia >= 0 && m) { if (m & (1u << ia)) sc += 60; else if (ie >= 0 && (m & (1u << ie))) sc += 0; else if (multi) sc -= 20; else sc -= 160; } /* the user's audio named: first; else English (as one with none named, the original); only others named: last */
   if (is >= 0 && is != ia) { const char *sw[] = { "vost", "vostfr", "subbed", "subs", "sub", NULL }; int subWord = 0; for (int k = 0; sw[k]; k++) if (has_word(l, sw[k])) subWord = 1; if (subWord && (m & (1u << is))) sc += 12; }
   return sc; }
+static int maxMode; /* bestMax, read once per pick */
 static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestRate *o, int *resOut) {
   char t[2048], l[2048]; best_stream_info(s, t, sizeof t); lower(t, l, sizeof l); blank(l, "._-[]()");
   int p2p = s->p2p;
@@ -226,6 +227,19 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
   if (!o) return 1;
   o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; if (resOut) *resOut = r;
+  /* top quality, in this order (each only between streams equal in the ones before):
+     1. picture and source: 4K Remux, 4K BluRay, 4K WEB-DL, 4K WEBRip, (4K, source not named), then the same at 1080p, HDTV, lower
+     2. HDR: Dolby Vision (on a TV with it; without, a file that has HDR10 under it counts as HDR10), HDR10+, HDR10, HLG, none
+     3. sound as this TV plays it: TrueHD Atmos, DTS:X / DTS-HD MA, DD+ Atmos, DD+, AC3, AAC. A track the TV can't
+        decode is played converted to AC3 5.1, so it counts as that */
+  { int src = strstr(l, "remux") ? 5 : (strstr(l, "bluray") || strstr(l, "blu ray") || strstr(l, "bdrip") || strstr(l, "brrip")) ? 4
+      : (strstr(l, "webdl") || strstr(l, "web dl") || (has_word(l, "web") && !strstr(l, "webrip"))) ? 3 : (strstr(l, "webrip") || strstr(l, "web rip")) ? 2 : strstr(l, "hdtv") ? 0 : 1;
+    int tier = r >= 2160 ? 20 + src : r >= 1440 ? 15 + src : r >= 1080 ? 10 + src : r >= 720 ? 5 : 1;
+    int hr = 1; if (dv && c->dv) hr = 5; else if (strstr(hd, "HDR10+")) hr = 4; else if (strstr(hd, "HDR10") || strstr(hd, "HDR")) hr = 3; else if (strstr(hd, "HLG")) hr = 2; else if (dv) hr = 0; /* (Dolby Vision alone on a TV without it: wrong colours) */
+    int atm = strstr(au, "Atmos") != NULL, ar = 1;
+    if (thd) ar = c->truehd ? (atm ? 7 : 6) : 3; else if (!strncmp(au, "DTS:X", 5) || !strncmp(au, "DTS-HD MA", 9)) ar = cdts ? 6 : 3; else if (dts) ar = cdts ? 4 : 3;
+    else if (!strcmp(a0, "EAC3")) ar = atm ? 5 : 4; else if (!strcmp(a0, "AC3")) ar = 3; else if (!strcmp(a0, "AAC")) ar = 2;
+    o->key = (long)tier * 100 + hr * 10 + ar; }
   /* the summary: "4K  ·  DV HDR10  ·  EAC3 Atmos 5.1  ·  29.3 GB  ·  484 seeds" */
   char parts[5][48]; int np = 0;
   if (*rl) snprintf(parts[np++], 48, "%s", rl);
@@ -249,7 +263,12 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
   if (!c) { c = best_caps(); if (!c) c = &FALLBACK; }
   if (mbps < 0) mbps = best_net_mbps();
   if (durMin <= 0) durMin = 100;
-  int mx = c->maxRes ? c->maxRes : 1080;
+  int mx = c->maxRes ? c->maxRes : 1080, fits = 1;
+#ifndef SB_BEST_PURE
+  maxMode = best_max_on(); if (maxMode) fits = 0; /* top quality: the line's speed is not asked */
+#else
+  maxMode = getenv("SB_BEST_MAX") != NULL; if (maxMode) fits = 0; /* (the scoring test) */
+#endif
   BestRate *rs = n > 0 ? malloc(n * sizeof *rs) : NULL; int *tk = n > 0 ? malloc(n * sizeof *tk) : NULL, m = 0;
   for (int i = 0; i < n; i++) { int res = 0; if (!list[i] || !list[i]->url[0] || !rate(list[i], c, mbps, durMin, &rs[m], &res)) continue; tk[m++] = res == mx ? 0 : 1 + (mx - res); }
   const BestRate *best = NULL;
@@ -257,12 +276,41 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
   for (int done = 0, cur = -1; !best && !done; ) {
     int next = -1; for (int i = 0; i < m; i++) if (tk[i] > cur && (next < 0 || tk[i] < next)) next = tk[i];
     if (next < 0) { done = 1; break; } cur = next;
-    for (int i = 0; i < m; i++) if (tk[i] == cur && rs[i].need * 1.3 <= rs[i].cap && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && rs[i].sc > best->sc))) best = &rs[i];
+    for (int i = 0; i < m; i++) if (tk[i] == cur && (!fits || rs[i].need * 1.3 <= rs[i].cap) && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && rs[i].sc > best->sc))) best = &rs[i];
+    if (maxMode) { best = NULL; for (int i = 0; i < m; i++) if (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && (rs[i].key > best->key || (rs[i].key == best->key && rs[i].sc > best->sc)))) best = &rs[i]; break; } /* top quality: the order above, over everything that plays here; then the surest (debrid, seeds) */
   }
   if (!best && m) { int top = tk[0]; for (int i = 1; i < m; i++) if (tk[i] < top) top = tk[i];
     for (int i = 0; i < m; i++) if (tk[i] == top && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && (rs[i].need < best->need || (rs[i].need == best->need && rs[i].sc > best->sc))))) best = &rs[i]; }
   const Stream *s = best ? best->s : NULL; if (best && out) *out = *best;
-  free(rs); free(tk); return s;
+  free(rs); free(tk); maxMode = 0; return s;
+}
+
+/* ---- the subtitle made for the stream ----
+   Subtitles are timed to one release: the same group's file is in sync, another source or cut drifts or jumps. */
+static const char *const SRC[][5] = { { "remux", "bdremux", NULL }, { "bluray", "blu ray", "bdrip", "brrip", NULL }, { "web dl", "webdl", NULL },
+  { "webrip", "web rip", NULL }, { "hdtv", NULL }, { "dvdrip", "dvd", NULL } };
+static const char *const SVC[] = { "amzn", "nf", "dsnp", "hmax", "max", "atvp", "hulu", "pcok", "pmtp", "stan", "itunes", "crav", "cr", NULL };
+static const char *const CUT[] = { "extended", "directors", "unrated", "imax", "theatrical", "remastered", "uncut", NULL };
+static int src_of(const char *l) { for (int i = 0; i < (int)(sizeof SRC / sizeof SRC[0]); i++) for (int k = 0; SRC[i][k]; k++) if (strstr(l, SRC[i][k])) return i; return has_word(l, "web") ? 2 : -1; } /* (a bare WEB: a WEB-DL) */
+/* the release group: the word after the last dash of the name, before its extension ("...x265-NTb.mkv": ntb) */
+static void group_of(const char *s, char *out, size_t cap) {
+  out[0] = 0; char b[300]; snprintf(b, sizeof b, "%s", s); char *nl = strchr(b, '\n'); if (nl) *nl = 0;
+  char *ext = strrchr(b, '.'); if (ext && strlen(ext) <= 5) *ext = 0;
+  char *d = strrchr(b, '-'); if (!d) return; d++;
+  size_t k = 0; for (; *d && k + 1 < cap; d++) { unsigned char c = (unsigned char)*d; if (!wch(c)) break; out[k++] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c); } out[k] = 0;
+  if (k < 2 || !strcmp(out, "dl") || !strcmp(out, "rip")) out[0] = 0; }
+int best_sub_fit(const char *stream, const char *sub) {
+  if (!stream || !sub || !*stream || !*sub) return 0;
+  char a[1200], b[400], ga[64], gb[64]; lower(stream, a, sizeof a); lower(sub, b, sizeof b); blank(a, "._-[]()+,"); blank(b, "._-[]()+,");
+  group_of(stream, ga, sizeof ga); group_of(sub, gb, sizeof gb);
+  int sc = 0;
+  if (*ga && *gb) sc += !strcmp(ga, gb) ? 60 : -5;
+  int sa = src_of(a), sb = src_of(b);
+  if (sa >= 0 && sb >= 0) sc += sa == sb ? 25 : ((sa == 2 || sa == 3) && (sb == 2 || sb == 3)) ? 10 : (sa <= 1 && sb <= 1) ? 15 : -20;
+  for (int i = 0; SVC[i]; i++) if (has_word(a, SVC[i]) && has_word(b, SVC[i])) { sc += 15; break; }
+  for (int i = 0; CUT[i]; i++) { int x = has_word(a, CUT[i]), y = has_word(b, CUT[i]); if (x && y) sc += 10; else if (x != y) sc -= 12; }
+  const char *R[] = { "2160p", "1080p", "720p", "480p", NULL }; for (int i = 0; R[i]; i++) if (strstr(a, R[i]) && strstr(b, R[i])) { sc += 5; break; }
+  return sc;
 }
 
 #ifdef SB_BEST_PURE
@@ -270,6 +318,8 @@ int best_dts_mode(void) { return 0; } /* the scoring test: Auto, as the web app 
 #endif
 #ifndef SB_BEST_PURE
 int best_on(void) { return !strcmp(store_get("autoBest", "false"), "true"); }
+int best_max_on(void) { return !strcmp(store_get("bestMax", "false"), "true"); }
+int best_play_on(void) { return best_on() || best_max_on(); }
 int best_dur(const cJSON *meta, const char *type) {
   const cJSON *rt = meta ? cJSON_GetObjectItemCaseSensitive(meta, "runtime") : NULL; char b[64] = "";
   if (cJSON_IsString(rt) && rt->valuestring) snprintf(b, sizeof b, "%s", rt->valuestring); else if (cJSON_IsNumber(rt)) snprintf(b, sizeof b, "%g", rt->valuedouble);

@@ -59,7 +59,7 @@ static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" 
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 9
 #define MAXROWS 48
-static Setting playBase[8], playS[8], subsS[9], audS[5], lookS[2], langS[3], keyS[4], addonS[40], acctS[1], supS[6];
+static Setting playBase[9], playS[9], subsS[9], audS[5], lookS[2], langS[3], keyS[4], addonS[40], acctS[1], supS[6];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -145,6 +145,7 @@ static int iUsb = 5;
 static void play_layout(void) {
   int on = strcmp(store_get("bgTrailer", "true"), "false") != 0, n = 0;
   playS[n++] = playBase[4]; /* the best stream first */
+  playS[n++] = playBase[8]; /* top quality: a switch of its own, beside it */
   for (int i = 0; i < 4; i++) playS[n++] = playBase[i];
   if (on) playS[n++] = playBase[6];
   const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7];
@@ -165,6 +166,7 @@ static void build(void) {
   set_s(&playBase[2], "aspectMode", "Picture size", "Original, fill the screen or zoom", ASPECT, 3, "fit");
   set_s(&playBase[3], "bgTrailer", "Background trailers", "A trailer plays behind Home after a few seconds", OO, 2, "true");
   set_s(&playBase[4], "autoBest", "Play the best stream automatically", "", OO, 2, "false");
+  set_s(&playBase[8], "bestMax", "Top quality, matching subtitles", "4K, Dolby Vision and Atmos first, whatever the speed, with the subtitle made for that release", OO, 2, "false");
   set_s(&playBase[7], "dv7Convert", "Dolby Vision for Blu-ray copies", "Their picture is converted on this TV so it shows in Dolby Vision, not HDR10", OO, 2, "true");
   set_s(&playBase[6], "bgTrailerVol", "Volume", "The sound comes up softly to this level", SVOL, 10, "70"); playBase[6].sub = 1; /* (shown right under the trailers while they are on: play_layout; drawn as theirs, set in) */
   usb_row();
@@ -255,6 +257,7 @@ int settings_apply_pref(const char *k, const char *v) {
   if (!strcmp(k, "uiLang")) { store_set("uiLang", v); i18n_init(plat_asset_dir(), v); text_set_rtl(i18n_rtl()); text_gc(); board_invalidate(); /* the whole app in the phone's language, at once */
     if (SCR == SCR_SET) { int c = S.cat, i = S.idx, z = S.zone; enter(NULL); S.cat = c; S.idx = i; S.zone = z == 2 ? 1 : z; show_cat(c, 0); S.enterAt = app_now() - 10; } return 1; }
   store_set(k, v); S.dirty = 1;
+  if (!strcmp(k, "bestMax") && !strcmp(v, "true")) best_caps_probe(NULL, NULL);
   if (!strcmp(k, "bingeWatch")) store_set("enableNextVideo", v);
   if (!strcmp(k, "bgTrailer")) play_layout();
   if (!strcmp(k, "accent")) accent_apply();
@@ -276,6 +279,7 @@ static void set_val(Setting *o, const char *v, int dir) {
   if (!strcmp(o->k, "uiLang")) { if (strcmp(v, store_get("uiLang", "auto"))) { store_set("uiLang", v); i18n_init(plat_asset_dir(), v); text_set_rtl(i18n_rtl()); text_gc(); board_invalidate();
       int c = S.cat, i = S.idx, z = S.zone; enter(NULL); S.cat = c; S.idx = i; S.zone = z == 2 ? 1 : z; show_cat(c, 0); S.enterAt = app_now() - 10; } return; } /* the same place, in the new language */
   store_set(o->k, v); S.dirty = 1;
+  if (!strcmp(o->k, "bestMax") && !strcmp(v, "true")) best_caps_probe(NULL, NULL); /* what this TV shows and decodes: asked once, kept */
   if (!strcmp(o->k, "bgTrailer")) play_layout(); /* its volume row comes and goes with it, right under it */
   if (!strncmp(o->k, "adOn_", 5)) { board_invalidate(); cats[5].n = addon_opts(); return; } /* an addon on/off here: rows, metadata and streams follow */
   if (!strcmp(o->k, "bingeWatch")) store_set("enableNextVideo", v);

@@ -125,7 +125,7 @@ static struct {
   double liveT0, steadyAt; /* the first frame came / playing steadily since */
   int ssOn; double ssAt, ssCheckAt, lastAct; double size; char sizeTxt[24]; unsigned sizeTok; int httpSt, sizeAns, canNext; double errAt; int lastVw, lastVh; double aspRefreshAt;
   /* the pointer: the time bubble over the bar */ int hvOn, barDown; float hvP; Mo hvA;
-  int extTry, embKnown, embWaitOver; double extRetryAt, embWaitAt;
+  int extTry, embKnown, embWaitOver, matchWaitOver; double extRetryAt, embWaitAt, matchWaitAt;
   /* the stream as its addon gave it (headers, group, file facts); the subtitles addons installed for this video, the
      language chosen in their tab */
   Stream st; int nSubAddons; char subLang[24]; unsigned ytTok;
@@ -436,6 +436,20 @@ static void auto_sub(void) {
   int em = -1; for (int j = 0; j < P.nEmb; j++) if (lang_match(P.emb[j].lang, w) && (em < 0 || (P.emb[em].forced && !P.emb[j].forced))) em = j;
   if (em >= 0) { P.autoSubDone = 1; set_emb_sub(P.emb[em].idx); return; } /* embedded wins: it is in sync with the file */
   if (!P.embKnown && !P.embWaitOver) { if (!P.embWaitAt) P.embWaitAt = now_() + 8; return; } /* the file's own tracks get 8 s to show up first */
+  if (best_max_on()) { /* "Top quality, matching subtitles": of the ones in this language, the one made for this release */
+    char rel[1100]; snprintf(rel, sizeof rel, "%s", P.st.filename[0] ? P.st.filename : P.st.title);
+    SubEntry *pick = NULL; int kind = 0, top = -1000000;
+    for (int li = 1; li <= 2; li++) { SubEntry *l = li == 1 ? P.ext : P.adx; int n = li == 1 ? P.nExt : P.nAdx;
+      for (int i = 0; i < n; i++) { SubEntry *e = &l[i]; if (!lang_match(e->lang, w)) continue;
+        char from[200]; snprintf(from, sizeof from, "%s %s", e->addon, e->label); for (char *c = from; *c; c++) *c = (char)tolower((unsigned char)*c);
+        int sc = e->hm ? 1000 : best_sub_fit(rel, e->rel[0] ? e->rel : e->label); /* found by the file's hash: made for this very file */
+        if (strstr(from, "subdl") || strstr(from, "subsource")) sc += 8;
+        if (sc > top) { top = sc; pick = e; kind = li; } } }
+    /* the lists come in one by one: until all are in (10 s at most), unless one was found by the file's hash */
+    if (top < 1000 && (P.extLoading || P.adxLoading) && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
+    if (pick) { fprintf(stderr, "[subs] matching the release \"%.80s\": %s (%s, fit %d)\n", rel, pick->rel[0] ? pick->rel : pick->label, pick->addon, top);
+      P.autoSubDone = 1; set_ext_sub(kind, pick); sync_auto_arm(); }
+    return; }
   for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
   for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
 }
@@ -1446,8 +1460,19 @@ static void dly_draw(void);
 static void dly_open(void) { close_tray(); P.osd = 0; P.mode = 4; P.dlyF = 0; mo_set(&P.dlyR, 0); mo_to(&P.dlyA, 1, .28f, C_OUT, 0); }
 static void dly_close(void) { P.mode = 0; mo_to(&P.dlyA, 0, .2f, C_EASE, 0); }
 static void dly_change(double d) { P.pvU |= 4; double v = P.subDelay == 0 ? (d > 0 ? DLY_FIRST : -DLY_FIRST) : P.subDelay + d; /* 0, 0.10, 0.11, 0.12, ... (and below 0 the same) */ v = floor(v / DLY_STEP + 0.5) * DLY_STEP; if (v > 120) v = 120; if (v < -120) v = -120; P.subDelay = fabs(v) < 1e-6 ? 0 : v; P.dlyAt = now_(); }
+/* − and + held down (OK, or the pointer's button): one step at once, then after a moment they go on by themselves,
+   faster the longer they are held (a hundredth at a time, then a tenth), until let go */
+static struct { int on, btn, ptr; double t0, next; } DH;
 static void dly_act(int i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0);
-  if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close(); }
+  if (i == 0) dly_change(-DLY_STEP); else if (i == 1) dly_change(DLY_STEP); else if (i == 2) toggle(); else dly_close();
+  if (i <= 1) { DH.on = 1; DH.ptr = 0; DH.btn = i; DH.t0 = now_(); DH.next = DH.t0 + 0.45; } }
+static void dly_hold_tick(void) {
+  if (!DH.on) return;
+  if (P.mode != 4 || P.dlyF != DH.btn || (!DH.ptr && !app_ok_down())) { DH.on = DH.ptr = 0; return; }
+  double t = now_(); int n = 0;
+  while (t >= DH.next && n++ < 4) { double held = t - DH.t0, step = held > 4.0 ? 0.1 : DLY_STEP; dly_change(DH.btn ? step : -step);
+    DH.next += held > 4.0 ? 0.09 : held > 1.6 ? 0.05 : 0.11; }
+  if (t > DH.next) DH.next = t; }
 static void dly_key(int k) {
   if (k == K_LEFT) { if (P.dlyF > 0) { P.dlyF--; mo_to(&P.dlyR, (float)P.dlyF, .18f, C_OUT, 0); } else nudge_start(&P.nudge, k); }
   else if (k == K_RIGHT) { if (P.dlyF < 3) { P.dlyF++; mo_to(&P.dlyR, (float)P.dlyF, .18f, C_OUT, 0); } else nudge_start(&P.nudge, k); }
@@ -1920,7 +1945,7 @@ static void foc_update(void) {
 void player_tick(float dt) {
   hand_tick(dt);
   subs_pump(); /* subtitle files and lists, fetched on their own threads */
-  if (!P.open) return; video_pump(); sync_tick();
+  if (!P.open) return; video_pump(); sync_tick(); dly_hold_tick();
   css();
   Mo *mo[] = { &P.pgA, &P.pgY, &P.in, &P.artA, &P.ttlA, &P.ttlX, &P.ttlY, &P.barA, &P.barY, &P.btnA, &P.btnY, &P.topR, &P.topY, &P.dim, &P.dimT, &P.vig, &P.pzA, &P.bufA, &P.lnA, &P.skA, &P.skS, &P.knA,
     &P.prA, &P.prY, &P.prB, &P.subB, &P.ccS, &P.dlyA, &P.dlyR, &P.p2pA, &P.focX, &P.focY, &P.focW, &P.focH, &P.focA, &P.tipA, &P.hvA, &P.tray.open, &P.tray.openA, &P.tray.rowX, &P.tray.tabsX, &P.tray.ringX, &P.tray.ringY, &P.tray.ringA, &RL.t };
@@ -1955,6 +1980,7 @@ void player_tick(float dt) {
   if (P.extRetryAt && now_() >= P.extRetryAt) { P.extRetryAt = 0; load_ext_subs(P.extTry + 1); }
   if (P.adxRetryAt && now_() >= P.adxRetryAt) { P.adxRetryAt = 0; load_addon_subs(P.adxTry + 1); }
   if (P.embWaitAt && !P.embWaitOver && now_() >= P.embWaitAt) { P.embWaitOver = 1; auto_sub(); }
+  if (P.matchWaitAt && !P.matchWaitOver && now_() >= P.matchWaitAt) { P.matchWaitOver = 1; auto_sub(); }
   sub_check(); ass_sync();
   sk_tick(); loc_apply();
   if (P.started && !P.ldd && dur() > 0) P.ldd = 1; /* the length is known: the loading line fades before the picture comes */
@@ -2503,10 +2529,11 @@ void player_ptr(int type, float x, float y) {
   if (!P.open || P.closing || !P.live) return; /* the art is up (resolving): nothing to point at */
   float L25 = text_line_height(25), barTop = SB_H - 54 - 94 - 30 - L25; /* the bar's row, its times included (the track alone is a few pixels high) */
   int onBar = y >= barTop && y <= barTop + L25, onBtns = y >= SB_H - 54 - 94 && y <= SB_H - 54;
+  if (type == 2) DH.on = DH.ptr = 0; /* (the pointer's button let go: a held − or + stops) */
   if (type == 2) { if (P.barDown && onBar) { ptr_hv(1, x); double d = dur(); if (d > 0) { P.seekT = P.hvP * d; commit_seek(); } } P.barDown = 0; return; } /* the bar seeks on release, where the pointer is then */
   int down = type == 1;
   if (P.mode == 4) { /* the delay card: its buttons; elsewhere the picture stays as it is */
-    if (DG.h > 0 && y >= DG.y && y <= DG.y + DG.h) for (int i = 0; i < 4; i++) if (x >= DG.x[i] && x <= DG.x[i] + DG.w[i]) { if (P.dlyF != i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0); } if (down) dly_act(i); return; }
+    if (DG.h > 0 && y >= DG.y && y <= DG.y + DG.h) for (int i = 0; i < 4; i++) if (x >= DG.x[i] && x <= DG.x[i] + DG.w[i]) { if (P.dlyF != i) { P.dlyF = i; mo_to(&P.dlyR, (float)i, .18f, C_OUT, 0); } if (down) { dly_act(i); if (DH.on) DH.ptr = 1; } return; }
     return; }
   if (P.mode == 2) {
     if (PG.tray && in_box(x, y, PG.x, PG.y, PG.w, PG.h)) { ptr_tray(x, y, down); return; }
