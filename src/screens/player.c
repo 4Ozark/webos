@@ -1024,8 +1024,9 @@ static void check_prompt(void) {
   if (want == P.prompt.k) return;
   P.prompt.k = want; P.prompt.big = big; P.prompt.autoN = 0; P.prompt.nbtn = 0;
   if (want == 1 || want == 2) { P.prompt.b[0].id = "skip"; snprintf(P.prompt.b[0].lb, 48, "%s", T(want == 1 ? "Skip intro" : "Skip recap")); P.prompt.b[0].to = want == 1 ? P.intro.e : P.recap.e; P.prompt.b[0].main = 0; P.prompt.nbtn = 1;
-    /* the pill fills up and skips by itself when full (about 6 s, less when the part ends sooner); OK skips now, a pause stops it */
-    if (!paused()) { double e = want == 1 ? P.intro.e : P.recap.e, dd = e - t - 1; P.prompt.autoN = 1; P.prompt.t0 = now_(); P.prompt.adur = dd < 2.5 ? 2.5 : dd > 6 ? 6 : dd; } }
+    /* with "Skip intro and recap by themselves" on (Settings > Playback; off by default): the pill fills up and skips when
+       full (about 6 s, less when the part ends sooner). Off: the button only, it skips when pressed. OK skips now, a pause stops it */
+    if (!paused() && !strcmp(store_get("autoSkipIntro", "false"), "true")) { double e = want == 1 ? P.intro.e : P.recap.e, dd = e - t - 1; P.prompt.autoN = 1; P.prompt.t0 = now_(); P.prompt.adur = dd < 2.5 ? 2.5 : dd > 6 ? 6 : dd; } }
   else if (want == 3) { P.prompt.b[0].id = "credits"; snprintf(P.prompt.b[0].lb, 48, "%s", T("Watch credits")); P.prompt.b[0].main = 0; P.prompt.b[1].id = P.next.has ? "next" : "sim"; snprintf(P.prompt.b[1].lb, 48, "%s", T(P.next.has ? "Next episode" : "Something similar")); P.prompt.b[1].main = 1; P.prompt.nbtn = 2;
     /* credits + autoplay on: "Next episode" fills up and plays by itself unless you pick something */
     if (P.next.has && strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false")) { P.prompt.autoN = 1; P.prompt.t0 = now_(); P.prompt.adur = 10; } }
