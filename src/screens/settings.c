@@ -59,7 +59,7 @@ static const Opt SS_OPTS[] = { { "0", "Off" }, { "1", "1 min" }, { "2", "2 min" 
 static const Opt ACCENT_OPTS[] = { { "logo", "From the logo" }, { "adaptive", "From the artwork" }, { "purple", "Purple" }, { "violet", "Violet" }, { "fuchsia", "Fuchsia" }, { "pink", "Pink" }, { "rose", "Rose" }, { "red", "Red" }, { "orange", "Orange" }, { "amber", "Amber" }, { "gold", "Gold" }, { "lime", "Lime" }, { "green", "Green" }, { "emerald", "Emerald" }, { "teal", "Teal" }, { "cyan", "Cyan" }, { "sky", "Sky" }, { "blue", "Blue" }, { "indigo", "Indigo" }, { "graphite", "Graphite" } };
 #define NCAT 9
 #define MAXROWS 48
-static Setting playBase[9], playS[9], subsS[9], audS[5], lookS[2], langS[3], keyS[4], addonS[40], acctS[1], supS[6];
+static Setting playBase[10], playS[10], subsS[9], audS[5], lookS[2], langS[3], keyS[4], addonS[40], acctS[1], supS[6];
 static Cat cats[NCAT]; static int ncat; /* (Keys leaves when this build carries every key) */
 
 /* the layout, in the web's pixels: the grid is centred, 1600 wide, 150 from the top */
@@ -146,7 +146,7 @@ static void play_layout(void) {
   int on = strcmp(store_get("bgTrailer", "true"), "false") != 0, n = 0;
   playS[n++] = playBase[4]; /* the best stream first */
   playS[n++] = playBase[8]; /* top quality: a switch of its own, beside it */
-  for (int i = 0; i < 4; i++) playS[n++] = playBase[i];
+  for (int i = 0; i < 4; i++) { playS[n++] = playBase[i]; if (i == 1) playS[n++] = playBase[9]; } /* (skipping by itself: under the next episode's) */
   if (on) playS[n++] = playBase[6];
   const TvCaps *tc = best_caps(); if (tc && tc->dv) playS[n++] = playBase[7];
   iUsb = n; playS[n++] = playBase[5];
@@ -163,6 +163,7 @@ static void caps_known(const TvCaps *c, void *ud) { (void)c; (void)ud; play_layo
 static void build(void) {
   set_s(&playBase[0], "seekStep", "Seek step", "How far Left / Right jumps in the player", SEEK, 5, "10");
   set_s(&playBase[1], "bingeWatch", "Auto-play next episode", "When an episode ends, the next one starts", OO, 2, "true");
+  set_s(&playBase[9], "autoSkipIntro", "Skip intro and recap by themselves", "Off: the button fills up, then waits for you to press it", OO, 2, "false");
   set_s(&playBase[2], "aspectMode", "Picture size", "Original, fill the screen or zoom", ASPECT, 3, "fit");
   set_s(&playBase[3], "bgTrailer", "Background trailers", "A trailer plays behind Home after a few seconds", OO, 2, "true");
   set_s(&playBase[4], "autoBest", "Play the best stream automatically", "", OO, 2, "false");

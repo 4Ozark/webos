@@ -1024,7 +1024,9 @@ static void check_prompt(void) {
   if (want == P.prompt.k) return;
   P.prompt.k = want; P.prompt.big = big; P.prompt.autoN = 0; P.prompt.nbtn = 0;
   if (want == 1 || want == 2) { P.prompt.b[0].id = "skip"; snprintf(P.prompt.b[0].lb, 48, "%s", T(want == 1 ? "Skip intro" : "Skip recap")); P.prompt.b[0].to = want == 1 ? P.intro.e : P.recap.e; P.prompt.b[0].main = 0; P.prompt.nbtn = 1;
-    /* the pill fills up and skips by itself when full (about 6 s, less when the part ends sooner); OK skips now, a pause stops it */
+    /* the pill fills up (about 6 s, less when the part ends sooner); full, it skips by itself only with "Skip intro and
+       recap by themselves" on (Settings > Playback; off by default), else it stays full until OK or the part's end.
+       OK skips now, a pause stops it */
     if (!paused()) { double e = want == 1 ? P.intro.e : P.recap.e, dd = e - t - 1; P.prompt.autoN = 1; P.prompt.t0 = now_(); P.prompt.adur = dd < 2.5 ? 2.5 : dd > 6 ? 6 : dd; } }
   else if (want == 3) { P.prompt.b[0].id = "credits"; snprintf(P.prompt.b[0].lb, 48, "%s", T("Watch credits")); P.prompt.b[0].main = 0; P.prompt.b[1].id = P.next.has ? "next" : "sim"; snprintf(P.prompt.b[1].lb, 48, "%s", T(P.next.has ? "Next episode" : "Something similar")); P.prompt.b[1].main = 1; P.prompt.nbtn = 2;
     /* credits + autoplay on: "Next episode" fills up and plays by itself unless you pick something */
@@ -2008,7 +2010,7 @@ void player_tick(float dt) {
     if (vs == VID_ENDED && !P.ended) { P.ended = 1; int up = up_next_ok(); save_progress(!up); mark_watched(); advance_up_next(); /* (up: the one push is the state moved on to the next episode) */ if (strcmp(store_get("bingeWatch", "true"), "false") && strcmp(store_get("enableNextVideo", "true"), "false") && P.next.has) P.endGoAt = now_() + 0.6; else close_player(0, 0); }
     if (P.endGoAt && now_() >= P.endGoAt) { P.endGoAt = 0; go_next(); if (!P.open || P.closing) return; }
     check_prompt();
-    if (P.prompt.autoN && (P.prompt.k == 1 || P.prompt.k == 2) && now_() - P.prompt.t0 >= P.prompt.adur && !paused()) prompt_go(0);
+    if (P.prompt.autoN && (P.prompt.k == 1 || P.prompt.k == 2) && now_() - P.prompt.t0 >= P.prompt.adur && !paused()) { if (!strcmp(store_get("autoSkipIntro", "false"), "true")) prompt_go(0); } /* (off: it stays full, a button) */
     else if (P.prompt.autoN && P.prompt.k == 3 && now_() - P.prompt.t0 >= 10) { P.prompt.autoN = 0; next_auto(); }
     if (!P.live) return; /* a new episode is being found */
     const char *r = res_of_video(video_width(), video_height()); if (*r && !P.isTrailer) P.res = r;
