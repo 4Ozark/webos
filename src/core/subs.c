@@ -115,6 +115,20 @@ void subs_free(Cue *c, int n) { if (!c) return; for (int i = 0; i < n; i++) free
 
 /* some subtitle hosts hand out the .gz file itself (no Content-Encoding): unpacked here, 16 MB at most; then the
    text's own encoding (UTF-16 has zero bytes, so it is decoded before anything reads it as a C string) */
+/* lines a subtitle addon writes into the file it serves, not the film's: "• SubDL Subtitles v1.2.2 • <release> –
+   [85% تطابق]" over the opening seconds, its site's address. Left out, so they neither cover the first words nor count
+   as speech when Auto-sync lines the file up */
+static int is_banner(const char *t) {
+  char l[600]; size_t i = 0; for (; t[i] && i + 1 < sizeof l; i++) { unsigned char c = (unsigned char)t[i]; l[i] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c); } l[i] = 0;
+  const char *v = strstr(l, "subtitles v"); if (v && v[11] >= '0' && v[11] <= '9') return 1;
+  if (strstr(l, "% match]") || strstr(l, "\xd8\xaa\xd8\xb7\xd8\xa7\xd8\xa8\xd9\x82]")) return 1; /* "[85% match]", "[85% تطابق]" */
+  if (strstr(l, "subdl.com") || strstr(l, "subsource.net") || strstr(l, "subsyncer")) return 1;
+  return 0;
+}
+static int drop_banners(Cue *c, int n) {
+  int k = 0; for (int i = 0; i < n; i++) { if (c[i].t && is_banner(c[i].t)) { free(c[i].t); continue; } c[k++] = c[i]; }
+  return k;
+}
 int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
   *out = NULL; if (!body) return 0;
   unsigned char *buf = NULL; size_t n = 0;
@@ -130,7 +144,7 @@ int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
     body = buf; len = n;
   }
   char *txt = to_text(body, len); free(buf);
-  int k = subs_parse_any(txt, out); free(txt); return k;
+  int k = subs_parse_any(txt, out); free(txt); return drop_banners(*out, k);
 }
 
 /* ---- language codes ---- */
