@@ -457,10 +457,11 @@ static void auto_sub(void) {
       for (int i = 0; i < n; i++) { SubEntry *e = &l[i]; if (!lang_match(e->lang, w)) continue;
         char from[200]; snprintf(from, sizeof from, "%s %s", e->addon, e->label); for (char *c = from; *c; c++) *c = (char)tolower((unsigned char)*c);
         int sc = e->hm ? 1000 : best_sub_fit(rel, e->rel[0] ? e->rel : e->label); /* found by the file's hash: made for this very file */
+        if (li == 2) sc += 2000; /* the viewer's own subtitle addons before the built-in OpenSubtitles list; among them, the hash and the release decide (Auto-sync still uses the built-in ones as references) */
         if (strstr(from, "subdl") || strstr(from, "subsource")) sc += 8;
         if (sc > top) { top = sc; pick = e; kind = li; } } }
     /* the lists come in one by one: until all are in (10 s at most), unless one was found by the file's hash */
-    if (top < 1000 && (P.extLoading || P.adxLoading) && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
+    if (top < 3000 && (P.extLoading || P.adxLoading) && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
     if (pick) { fprintf(stderr, "[subs] matching the release \"%.80s\": %s (%s, fit %d)\n", rel, pick->rel[0] ? pick->rel : pick->label, pick->addon, top);
       P.autoSubDone = 1; set_ext_sub(kind, pick); sync_auto_arm(); }
     return; }
