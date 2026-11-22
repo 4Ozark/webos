@@ -133,12 +133,20 @@ struct MkvSession {
 static double mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static int net_err(int e) { return e == NR_NET || e == NR_TIMEOUT || e == NR_BUSY; }
 
+/* one read: straight to where the link led last time (a debrid addon's link, TorBox's above all, resolves the file
+   again on every request, seconds each); that address refused (a signed link expired): the link itself again */
+static int get(MkvSession *s, long long start, long len, unsigned char **out, long *got, long long *t, int *st) {
+  char to[4096]; const char *e = net_range_url(s->net); snprintf(to, sizeof to, "%s", e ? e : s->url);
+  int r = net_range_get(s->net, to, start, len, out, got, t, st, TIMEOUT_MS);
+  if (e && r == NR_HTTP && strcmp(to, s->url)) r = net_range_get(s->net, s->url, start, len, out, got, t, st, TIMEOUT_MS);
+  return r;
+}
 /* reads exactly [start, start+len): some CDNs end a response early, so the rest is asked for while each follow-up brings bytes (3 empty ones end it) */
 static int range_full(MkvSession *s, long long start, long len, unsigned char **out, long *got, long long *total) {
   unsigned char *acc = malloc(len); long have = 0; int empty = 0, err = NR_OK; long long tot = -1;
   while (have < len && !s->dead) {
     unsigned char *b; long g; long long t; int st;
-    err = net_range_get(s->net, s->url, start + have, len - have, &b, &g, &t, &st, TIMEOUT_MS);
+    err = get(s, start + have, len - have, &b, &g, &t, &st);
     if (t > 0) tot = t;
     if (g > 0) { memcpy(acc + have, b, g); have += g; empty = 0; free(b); } else empty++;
     if (have >= len || (tot > 0 && start + have >= tot)) { err = NR_OK; break; }
@@ -150,7 +158,7 @@ static int range_full(MkvSession *s, long long start, long len, unsigned char **
   *out = acc; *got = have; return NR_OK;
 }
 static int range_once(MkvSession *s, long long start, long len, unsigned char **out, long *got) {
-  long long t; int st; return net_range_get(s->net, s->url, start, len, out, got, &t, &st, TIMEOUT_MS);
+  long long t; int st; return get(s, start, len, out, got, &t, &st);
 }
 
 /* ---- head: Segment, SeekHead, Info, Tracks, Chapters ---- */
