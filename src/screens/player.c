@@ -592,7 +592,10 @@ static void sync_by_ref(const char *why) {
   if (!SY.job) { sync_end(T("Couldn’t sync")); return; }
   SY.phase = 2; SY.stage = 1; if (!SY.quiet) snprintf(SY.st, sizeof SY.st, "%s", sync_wait_txt(1)); refresh_tray(4);
 }
-static void sync_auto_arm(void) { if (!P.nEmb && !P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); } } /* (a file with subtitles of its own has them chosen instead) */
+/* an outside subtitle the app chose by itself gets checked: against the file's own text tracks when it has some (none in
+   the viewer's language, else one of those was chosen; their times are the file's, the best reference), else against
+   other subtitles made for this file */
+static void sync_auto_arm(void) { if (!P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); } }
 /* the subtitle the app chose by itself at the start, for a file with no subtitles of its own: checked once its lines are
    in and the lists have answered (or 15 s on), quietly; lined up only when clearly out (half a second or more, or the
    wrong speed) and the viewer has set no delay, then said in a toast */
