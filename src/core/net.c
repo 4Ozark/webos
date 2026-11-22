@@ -315,7 +315,7 @@ int net_pipe_sync(const char *url, const char *headers, int head, NetHdrSink hs,
 }
 
 /* ---- ranged reads ---------------------------------------------------------------------------- */
-struct NetRange { CURL *c; };
+struct NetRange { CURL *c; char eff[4096]; }; /* eff: where the last read ended up after the redirects */
 typedef struct { unsigned char *buf; long len, got; int status, isRange; long long reqStart, crStart, total; int norange; } RangeCtx;
 static size_t range_hdr(char *p, size_t s, size_t n, void *ud) {
   RangeCtx *r = ud; size_t l = s * n; char line[512]; size_t k = l < sizeof line - 1 ? l : sizeof line - 1; memcpy(line, p, k); line[k] = 0;
@@ -337,6 +337,7 @@ static size_t range_data(char *p, size_t s, size_t n, void *ud) {
   return r->got >= r->len ? 0 : add;                                      /* had what was asked: stop (a 200 for the whole file must not keep downloading) */
 }
 NetRange *net_range_new(void) { if (!f_easy_init && !resolve()) return NULL; NetRange *r = calloc(1, sizeof *r); r->c = f_easy_init(); if (!r->c) { free(r); return NULL; } return r; }
+const char *net_range_url(NetRange *r) { return r && r->eff[0] ? r->eff : NULL; }
 void net_range_free(NetRange *r) { if (!r) return; if (r->c) f_easy_cleanup(r->c); free(r); }
 int net_range_get(NetRange *h, const char *url, long long start, long len, unsigned char **out, long *got, long long *total, int *httpStatus, int timeoutMs) {
   *out = NULL; *got = 0; if (total) *total = -1; if (httpStatus) *httpStatus = 0;
@@ -354,6 +355,7 @@ int net_range_get(NetRange *h, const char *url, long long start, long len, unsig
   if (caPath[0]) f_easy_setopt(c, CURLOPT_CAINFO, caPath);
   CURLcode rc = f_easy_perform(c);
   if (httpStatus) *httpStatus = r.status;
+  if (r.got > 0 && (r.status == 200 || r.status == 206)) { char *e = NULL; if (f_easy_getinfo(c, CURLINFO_EFFECTIVE_URL, &e) == CURLE_OK && e) snprintf(h->eff, sizeof h->eff, "%s", e); }
   if (total) *total = r.total;
   if (r.norange) { free(r.buf); return NR_NORANGE; }
   if (r.got > 0 && (r.status == 200 || r.status == 206)) { *out = r.buf; *got = r.got; return NR_OK; } /* full, or a server that cut the response: what came */

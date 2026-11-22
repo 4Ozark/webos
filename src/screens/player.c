@@ -482,6 +482,15 @@ static void on_adx(SubEntry *subs, int n, int final, int ok, void *ud) {
   if (final && !ok && !n && P.adxTry < 3 && P.nSubAddons) { free(subs); P.adxRetryAt = now_() + (P.adxTry + 1) * 15; return; }
   free(P.adx); P.adx = subs; P.nAdx = n; P.adxLoading = !final; if (n) auto_sub(); refresh_tray(4);
 }
+/* the file's name: the addon's behaviorHints.filename, else a line of the stream's description that is one (Torrentio and
+   others put it there for TorBox, whose links end with an id), else its address's last part when that is one */
+static void stream_filename(char *out, size_t cap) {
+  snprintf(out, cap, "%s", P.st.filename); if (out[0]) return;
+  char t[512]; snprintf(t, sizeof t, "%s", P.st.title);
+  for (char *ln = strtok(t, "\n"); ln; ln = strtok(NULL, "\n")) { while (*ln == ' ') ln++; char u[600]; snprintf(u, sizeof u, "/%s", ln); for (char *c = u; *c; c++) if (*c == '/' && c != u) *c = '_';
+    if (subs_name_from_url(u, out, cap)) return; }
+  subs_name_from_url(P.url, out, cap);
+}
 static int hashable(const char *u) { return !strncmp(u, "http", 4) && !strstr(u, ".m3u8"); }
 static char artName[256], artPoster[512], artBg[512], artLogo[512]; /* the next play's title and pictures as handed over (a phone's) */
 static SubEntry castSubs[16]; static int castSubsN = -1; /* the next play's subtitles as a phone sent them (-1: none sent) */
@@ -494,7 +503,7 @@ static void load_ext_subs(int n) { if (!P.type[0] || !P.vid[0] || P.isTrailer) r
 static void load_addon_subs(int n) { if (!P.type[0] || !P.vid[0] || P.isTrailer || getenv("SB_PLAY_SUBS")) return;
   P.adxTry = n; P.adxReq++; P.nSubAddons = subs_addons_for(P.type, P.vid);
   SubQuery q; memset(&q, 0, sizeof q); snprintf(q.type, sizeof q.type, "%s", P.type); snprintf(q.vid, sizeof q.vid, "%s", P.vid); snprintf(q.url, sizeof q.url, "%s", P.url);
-  snprintf(q.filename, sizeof q.filename, "%s", P.st.filename); snprintf(q.hash, sizeof q.hash, "%s", P.st.hash); q.size = P.st.size > 0 ? P.st.size : P.size; q.hashable = hashable(P.url);
+  stream_filename(q.filename, sizeof q.filename); snprintf(q.hash, sizeof q.hash, "%s", P.st.hash); q.size = P.st.size > 0 ? P.st.size : P.size; q.hashable = hashable(P.url);
   SubEntry *own = NULL; int nown = sb_stream_subs(&P.st, &own);
   if (!P.nSubAddons && !nown) { free(own); return; } /* nobody to ask */
   P.adxLoading = 1; subs_find(&q, own, nown, on_adx, (void *)(uintptr_t)P.adxReq); free(own); }
@@ -555,7 +564,7 @@ static void sync_by_ref(const char *why) {
       snprintf(r->url, sizeof r->url, "%s", e->url); snprintf(r->lang, sizeof r->lang, "%s", e->lang); snprintf(r->rel, sizeof r->rel, "%s", e->rel[0] ? e->rel : e->label);
       snprintf(r->from, sizeof r->from, "%s", e->addon); r->hm = e->hm; r->own = e->from == SUB_STREAM; r->fps = e->fps; } }
   SubQuery q; memset(&q, 0, sizeof q); snprintf(q.type, sizeof q.type, "%s", P.type); snprintf(q.vid, sizeof q.vid, "%s", P.vid); snprintf(q.url, sizeof q.url, "%s", P.url);
-  snprintf(q.filename, sizeof q.filename, "%s", P.st.filename); snprintf(q.hash, sizeof q.hash, "%s", P.st.hash); q.size = P.st.size > 0 ? P.st.size : P.size; q.hashable = hashable(P.url);
+  stream_filename(q.filename, sizeof q.filename); snprintf(q.hash, sizeof q.hash, "%s", P.st.hash); q.size = P.st.size > 0 ? P.st.size : P.size; q.hashable = hashable(P.url);
   if (!q.hash[0]) subs_hash_of(P.url, q.hash, &q.size); q.fps = video_fps();
   int canHash = (q.hash[0] || q.hashable) && q.type[0] && q.vid[0];
   fprintf(stderr, "[sync] %s: another subtitle made for this file as the reference (%d listed, hash %s)\n", why, n, q.hash[0] ? q.hash : canHash ? "to work out" : "unknown");

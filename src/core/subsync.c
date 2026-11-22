@@ -320,7 +320,7 @@ static int same_times(SubSync *j, const Cue *c, int n) {
   return cnt >= 10 && hit >= cnt * 0.9;
 }
 /* each reference's answer; several are asked for, and the job decides once one is clearly right or two agree */
-typedef struct { double f, d, r, m; int ok, local; } RefAns;
+typedef struct { double f, d, r, m; int ok, local, sure; } RefAns; /* sure: its reference was made for this very file (hash, the stream's own, its file name) */
 #define REF_TRIES 6
 static int agree(const SubSync *j, const RefAns *a, const RefAns *b) {
   double t0, t1; x_span(j, &t0, &t1);
@@ -331,7 +331,9 @@ static void *ref_main(void *arg) {
   plat_thread_background(5);
   SubSync *j = arg; SyncResult r = { SYNC_NOREF, 0, 1, 0, 0 }; SubQuery *q = &j->q;
   if (j->total < 10) { r.st = SYNC_NOSUB; finish(j, r); return NULL; }
-  if (!q->hash[0] && q->hashable && !j->cancel) { double sz = q->size; char h[17]; if (subs_os_hash(q->url, &sz, h)) { snprintf(q->hash, sizeof q->hash, "%s", h); q->size = sz; } }
+  if (!q->hash[0] && q->hashable && !j->cancel) { double sz = q->size; char h[17], eff[4096]; if (subs_os_hash(q->url, &sz, h, eff, sizeof eff)) { snprintf(q->hash, sizeof q->hash, "%s", h); q->size = sz; }
+    if (!q->filename[0] && eff[0] && subs_name_from_url(eff, q->filename, sizeof q->filename)) fprintf(stderr, "[sync] the file's name from where its link led: %s\n", q->filename); }
+  fprintf(stderr, "[sync] this file: %s, hash %s\n", q->filename[0] ? q->filename : "name unknown", q->hash[0] ? q->hash : "unknown");
   if (q->hash[0] && q->type[0] && q->vid[0] && !j->cancel) by_hash(j);
   rank(j);
   { int use = 0; for (int i = 0; i < j->nc; i++) use += j->c[i].score >= 0; fprintf(stderr, "[sync] %d candidate reference(s), %d usable (cinema recordings and split discs left out)\n", j->nc, use); }
@@ -362,14 +364,18 @@ static void *ref_main(void *arg) {
     else { fprintf(stderr, "[sync] nothing clear against reference %d\n", tried); continue; }
     if (na < REF_TRIES) ans[na++] = a;
     fprintf(stderr, "[sync] reference %d says %+.2f s x%.4f (score %.2f, margin %.2f)%s\n", tried, a.d, a.f, a.r, a.m, a.ok ? "" : ", not clear alone");
-    if (a.ok && a.r >= .55 && a.m >= .15) { r.st = SYNC_OK; r.f = a.f; r.d = a.d; r.score = (float)a.r; done = 1; fprintf(stderr, "[sync] clear answer from reference %d\n", tried); break; }
+    a.sure = c->r.hm || c->r.own || name_score(q->filename, c->r.rel) >= .5f;
+    /* a subtitle only known to be of this video may be timed for another release (another cut, other ads, another
+       intro): it lines this one up with that release, not with the file. Alone it never decides; two that agree do */
+    if (a.ok && a.sure && a.r >= .55 && a.m >= .15) { r.st = SYNC_OK; r.f = a.f; r.d = a.d; r.score = (float)a.r; done = 1; fprintf(stderr, "[sync] clear answer from reference %d\n", tried); break; }
     for (int q2 = 0; q2 < na - 1 && !done; q2++) if (agree(j, &ans[q2], &a)) { const RefAns *w = ans[q2].r >= a.r ? &ans[q2] : &a;
       r.st = SYNC_OK; r.f = w->f; r.d = w->d; r.score = (float)w->r; done = 1; fprintf(stderr, "[sync] references %d and %d agree: %+.2f s x%.4f\n", q2 + 1, tried, w->d, w->f); } }
   if (!done && !j->cancel) { int best = -1, clash = 0; /* the clear answers left: taken when they do not contradict each other */
-    for (int i = 0; i < na; i++) if (ans[i].ok && (best < 0 || ans[i].r > ans[best].r)) best = i;
+    for (int i = 0; i < na; i++) if (ans[i].ok && ans[i].sure && (best < 0 || ans[i].r > ans[best].r)) best = i;
     for (int i = 0; i < na && best >= 0; i++) if (ans[i].ok && i != best && !agree(j, &ans[i], &ans[best])) clash = 1;
     if (best >= 0 && !clash) { r.st = SYNC_OK; r.f = ans[best].f; r.d = ans[best].d; r.score = (float)ans[best].r; fprintf(stderr, "[sync] one clear answer, none against it: %+.2f s x%.4f\n", r.d, r.f); }
-    else if (clash) fprintf(stderr, "[sync] the references disagree\n"); }
+    else if (clash) fprintf(stderr, "[sync] the references disagree\n");
+    else if (na) fprintf(stderr, "[sync] only subtitles of other releases answered, and none agreed: left as it is\n"); }
   if (r.st == SYNC_OK) fprintf(stderr, "[sync] lined up: %+.2f s%s\n", r.d, fabs(r.f - 1) > 0.001 ? ", speed fixed" : "");
   else { r.st = na ? SYNC_UNSURE : fails && fails == tried ? SYNC_NOSUB : tried ? SYNC_UNSURE : SYNC_NOREF;
     if (!j->cancel) fprintf(stderr, "[sync] %s\n", r.st == SYNC_UNSURE ? "no reference gave a clear answer" : r.st == SYNC_NOSUB ? "the references could not be read" : "no other subtitle made for this file"); }
@@ -378,10 +384,7 @@ static void *ref_main(void *arg) {
 SubSync *subsync_start_ref(const Cue *X, int nx, double center, const SubQuery *q, const char *curUrl, const char *curLang, const SyncRef *refs, int nrefs) {
   SubSync *j = job_new(center, REF_BEHIND, REF_AHEAD, nx, R_MAX); if (!j) return NULL;
   j->range = REF_RANGE; load_x(j, X, nx); j->q = *q; snprintf(j->cur, sizeof j->cur, "%s", curUrl ? curUrl : ""); subs_lang_canon(curLang ? curLang : "", j->curLang, sizeof j->curLang);
-  if (!j->q.filename[0]) { /* the file's name from its address (debrid links end with it) */
-    const char *u = q->url, *e = u + strcspn(u, "?#"), *b = e; while (b > u && b[-1] != '/') b--; size_t o = 0;
-    for (const char *p = b; p < e && o + 1 < sizeof j->q.filename; p++) { if (*p == '%' && p + 2 < e) { unsigned v; if (sscanf(p + 1, "%2x", &v) == 1) { j->q.filename[o++] = (char)v; p += 2; continue; } } j->q.filename[o++] = *p == '+' ? ' ' : *p; }
-    j->q.filename[o] = 0; }
+  if (!j->q.filename[0]) subs_name_from_url(q->url, j->q.filename, sizeof j->q.filename); /* the file's name from its address (Real-Debrid's links end with it; others' with an id: nothing then) */
   for (int i = 0; i < nrefs; i++) { SyncRef r = refs[i]; subs_lang_canon(refs[i].lang, r.lang, sizeof r.lang); cand_add(j, &r); }
   j->stage = 1; start(j, ref_main); return j;
 }

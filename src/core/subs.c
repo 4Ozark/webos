@@ -194,15 +194,30 @@ void subs_load(const char *url, void (*cb)(int status, Cue *cues, int n, void *u
 }
 
 /* ---- the OpenSubtitles hash: the size plus the 64-bit little-endian words of the first and the last 64 KB ---- */
-int subs_os_hash(const char *url, double *size, char out[17]) {
-  out[0] = 0; NetRange *r = net_range_new(); if (!r) return 0; unsigned char *a = NULL, *b = NULL; long ga = 0, gb = 0; long long tot = -1; int st, ok = 0;
-  if (net_range_get(r, url, 0, 65536, &a, &ga, &tot, &st, 8000) == NR_OK && ga == 65536) {
+int subs_os_hash(const char *url, double *size, char out[17], char *eff, size_t effCap) {
+  out[0] = 0; if (eff && effCap) eff[0] = 0; NetRange *r = net_range_new(); if (!r) return 0; unsigned char *a = NULL, *b = NULL; long ga = 0, gb = 0; long long tot = -1; int st = 0, ok = 0, e1, e2 = -1;
+  /* the first read may wait on the debrid service resolving the link (TorBox through an addon: several seconds); the
+     second goes straight to where the first ended up, so the link is not resolved twice */
+  if ((e1 = net_range_get(r, url, 0, 65536, &a, &ga, &tot, &st, 20000)) == NR_OK && ga == 65536) {
+    const char *to = net_range_url(r); if (!to) to = url; if (eff && effCap) snprintf(eff, effCap, "%s", to);
     if (tot <= 0 && *size > 0) tot = (long long)*size;
-    if (tot >= 131072 && net_range_get(r, url, tot - 65536, 65536, &b, &gb, NULL, &st, 8000) == NR_OK && gb == 65536) {
+    if (tot >= 131072 && (e2 = net_range_get(r, to, tot - 65536, 65536, &b, &gb, NULL, &st, 12000)) == NR_OK && gb == 65536) {
       unsigned long long h = (unsigned long long)tot;
       for (int k = 0; k < 65536; k += 8) { unsigned long long x = 0, y = 0; for (int q = 7; q >= 0; q--) { x = x << 8 | a[k + q]; y = y << 8 | b[k + q]; } h += x + y; }
       snprintf(out, 17, "%016llx", h); *size = (double)tot; ok = 1; } }
+  if (!ok) fprintf(stderr, "[subs] the file's hash couldn't be worked out (start read %d, end read %d, HTTP %d, size %lld)\n", e1, e2, st, tot);
   free(a); free(b); net_range_free(r); return ok;
+}
+
+int subs_name_from_url(const char *url, char *out, size_t cap) {
+  static const char *ext[] = { ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".wmv", NULL };
+  const char *e = url + strcspn(url, "?#"), *b = e; while (b > url && b[-1] != '/') b--;
+  char n[512]; size_t o = 0;
+  for (const char *p = b; p < e && o + 1 < sizeof n; p++) { if (*p == '%' && p + 2 < e) { unsigned v; if (sscanf(p + 1, "%2x", &v) == 1) { n[o++] = (char)v; p += 2; continue; } } n[o++] = *p == '+' ? ' ' : *p; }
+  n[o] = 0; const char *dot = strrchr(n, '.'); int ok = 0;
+  for (int i = 0; dot && ext[i]; i++) if (!strcasecmp(dot, ext[i])) ok = 1;
+  if (!ok || dot - n < 4 || !cap) return 0;
+  snprintf(out, cap, "%s", n); return 1;
 }
 
 /* what an entry says of the file it was made for: its name, and whether the video's hash found it ("m": "h" on
@@ -287,7 +302,9 @@ static void find_answer(SubJob *j) {
 /* the hash (when the file can be read in ranges), then one request per source */
 static void *find_main(void *a) { plat_thread_background(5);
   FindQ *f = a; SubQuery *q = &f->q;
-  if (!q->hash[0] && q->hashable) { double sz = q->size; char h[17]; if (subs_os_hash(q->url, &sz, h)) { snprintf(q->hash, sizeof q->hash, "%s", h); q->size = sz; } }
+  if (!q->hash[0] && q->hashable) { double sz = q->size; char h[17], eff[4096]; if (subs_os_hash(q->url, &sz, h, eff, sizeof eff)) { snprintf(q->hash, sizeof q->hash, "%s", h); q->size = sz; }
+    if (!q->filename[0] && eff[0]) subs_name_from_url(eff, q->filename, sizeof q->filename); }
+  if (!q->filename[0]) subs_name_from_url(q->url, q->filename, sizeof q->filename);
   if (q->hash[0]) hash_keep(q->url, q->hash, q->size);
   char ex[600] = "", n[32]; if (q->hash[0]) addon_extra_add(ex, sizeof ex, "videoHash", q->hash);
   if (q->size > 0) { snprintf(n, sizeof n, "%.0f", q->size); addon_extra_add(ex, sizeof ex, "videoSize", n); }
