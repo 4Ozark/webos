@@ -552,7 +552,7 @@ static void load_emb_tracks(void) {
    against: a file with no text tracks (most HTTP and debrid files) is matched against another subtitle made for this
    file instead, found and read by the job itself; nothing of the kind: nothing to sync against. ---- */
 static struct { SubSync *job; int phase; /* 0 idle, 1 waiting for the reference, 2 matching */ int stage; double t0, nextAt, center; char st[160]; double *base; int nbase;
-  int quiet, autoWant; unsigned autoTok; double autoAt; /* quiet: the check of a subtitle the app chose by itself, unseen unless it fixes something */ } SY;
+  int quiet, autoWant, autoTries; unsigned autoTok; double autoAt; /* quiet: the check of a subtitle the app chose by itself, unseen unless it fixes something */ } SY;
 static void sync_stop(int keepTimes) {
   if (SY.job) { subsync_drop(SY.job); SY.job = NULL; } SY.phase = 0; SY.st[0] = 0; SY.quiet = 0;
   if (!keepTimes) { free(SY.base); SY.base = NULL; SY.nbase = 0; }
@@ -598,7 +598,7 @@ static void sync_by_ref(const char *why) {
 /* an outside subtitle the app chose by itself gets checked: against the file's own text tracks when it has some (none in
    the viewer's language, else one of those was chosen; their times are the file's, the best reference), else against
    other subtitles made for this file */
-static void sync_auto_arm(void) { if (!P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); } }
+static void sync_auto_arm(void) { if (!P.isTrailer) { SY.autoWant = 1; SY.autoTok = SL.tok; SY.autoAt = now_(); SY.autoTries = 0; } }
 /* the subtitle the app chose by itself at the start, for a file with no subtitles of its own: checked once its lines are
    in and the lists have answered (or 15 s on), quietly; lined up only when clearly out (half a second or more, or the
    wrong speed) and the viewer has set no delay, then said in a toast */
@@ -615,7 +615,12 @@ static void sync_tick(void) {
     subsync_drop(SY.job); SY.job = NULL;
     if (r.st == SYNC_NOREF) { sync_end(T("Nothing to sync against")); return; }
     if (r.st == SYNC_NOSUB) { sync_end(T("Couldn’t sync")); return; }
-    if (r.st != SYNC_OK) { sync_end(T("Not sure: unchanged")); return; }
+    if (r.st != SYNC_OK) {
+      /* checked by itself and not sure: the opening seconds (a recap, titles, few lines yet read) often say too little.
+         Asked again further on, 40 s, then 90 s, then 3 min later, while the same subtitle stays and no delay is set */
+      if (SY.quiet && SY.autoTries < 3) { static const double AGAIN[3] = { 40, 90, 180 }; double w = AGAIN[SY.autoTries++];
+        sync_end(T("Not sure: unchanged")); SY.autoWant = 1; SY.autoAt = now_() + w - 3; fprintf(stderr, "[sync] (by itself) asked again in %.0f s\n", w); return; }
+      sync_end(T("Not sure: unchanged")); return; }
     double at = video_time(), sh = at * (r.f - 1) + r.d; /* the shift where it is watched (a speed fix moves it along the film) */
     if (SY.quiet && (P.subDelay != 0 || (fabs(sh) < 0.5 && fabs(r.f - 1) < 0.0005))) { fprintf(stderr, "[sync] (by itself) %s: left as it is\n", P.subDelay != 0 ? "a delay was set meanwhile" : "already in sync"); sync_end(""); return; }
     if (!SY.base || SY.nbase != P.ncues) { free(SY.base); SY.base = malloc((size_t)(P.ncues ? P.ncues : 1) * 2 * sizeof *SY.base); SY.nbase = SY.base ? P.ncues : 0;
