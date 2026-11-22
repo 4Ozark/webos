@@ -29,6 +29,9 @@ jobs:
           SYSROOT=$(find "$HOME/origin-build/sdk" -type d -name sysroot -path '*arm-webos-linux-gnueabi*' | head -1)
           echo "ZIG=$HOME/origin-build/zig/zig" >> "$GITHUB_ENV"
           echo "SDK=$SYSROOT" >> "$GITHUB_ENV"
+      - name: Stamp the version
+        # each build gets its own version (1.0.<run number>), so Settings and webOS Dev Manager show which one is installed
+        run: sed -i -E "s/\"version\": *\"[^\"]*\"/\"version\": \"1.0.${{ github.run_number }}\"/" pkg/appinfo.json && grep version pkg/appinfo.json
       - name: Build and package
         run: tools/package.sh
       - uses: actions/upload-artifact@v4
