@@ -459,6 +459,7 @@ static void auto_sub(void) {
         int sc = e->hm ? 1000 : best_sub_fit(rel, e->rel[0] ? e->rel : e->label); /* found by the file's hash: made for this very file */
         if (li == 2) sc += 2000; /* the viewer's own subtitle addons before the built-in OpenSubtitles list; among them, the hash and the release decide (Auto-sync still uses the built-in ones as references) */
         if (strstr(from, "subdl") || strstr(from, "subsource")) sc += 8;
+        if (li == 2 && strstr(from, "subsyncer")) sc += 600; /* SubSyncer: the viewer's choice (it gathers SubDL's and SubSource's and times them to the file) */
         if (sc > top) { top = sc; pick = e; kind = li; } } }
     /* the lists come in one by one: until all are in (10 s at most), unless one was found by the file's hash */
     if (top < 3000 && (P.extLoading || P.adxLoading) && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
@@ -467,6 +468,8 @@ static void auto_sub(void) {
     return; }
   /* the viewer's own subtitle addons first (SubDL and the like), the built-in OpenSubtitles list after; while the addons
      are still answering (10 s at most), wait for them */
+  for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w) && strcasestr(P.adx[i].addon, "subsyncer")) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; } /* SubSyncer first */
+  if (P.adxLoading && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; } /* (it may still be answering) */
   for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
   if (P.adxLoading && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
   for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
