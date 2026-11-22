@@ -617,8 +617,8 @@ static void sync_tick(void) {
     if (r.st == SYNC_NOSUB) { sync_end(T("Couldn’t sync")); return; }
     if (r.st != SYNC_OK) {
       /* checked by itself and not sure: the opening seconds (a recap, titles, few lines yet read) often say too little.
-         Asked again further on, 40 s, then 90 s, then 3 min later, while the same subtitle stays and no delay is set */
-      if (SY.quiet && SY.autoTries < 3) { static const double AGAIN[3] = { 40, 90, 180 }; double w = AGAIN[SY.autoTries++];
+         Asked again further on, 20 s, then 45 s, then 90 s later, while the same subtitle stays and no delay is set */
+      if (SY.quiet && SY.autoTries < 3) { static const double AGAIN[3] = { 20, 45, 90 }; double w = AGAIN[SY.autoTries++];
         sync_end(T("Not sure: unchanged")); SY.autoWant = 1; SY.autoAt = now_() + w - 3; fprintf(stderr, "[sync] (by itself) asked again in %.0f s\n", w); return; }
       sync_end(T("Not sure: unchanged")); return; }
     double at = video_time(), sh = at * (r.f - 1) + r.d; /* the shift where it is watched (a speed fix moves it along the film) */
@@ -638,7 +638,10 @@ static void sync_tick(void) {
   double lo = SY.center - SYNC_BEHIND_S, hi = SY.center + SYNC_AHEAD_S; int best = -1, bestN = 0;
   for (int i = 0; i < nt; i++) { if (!tr[i].text) continue; ntext++; int c = mkv_lines_in(mkv, tr[i].n, lo, hi, NULL, 0, NULL, 0); if (c > bestN) { bestN = c; best = tr[i].n; } }
   if (listed && !ntext) { sync_by_ref("no text track in the file"); return; } /* the file has no text tracks at all */
-  if (bestN >= 12) {
+  /* the check the app makes by itself waits for 30 of the file's lines (12 say too little: a recap, the titles), or
+     20 s with at least 12; the file is read ahead of the picture, so that is usually a few seconds */
+  int need = SY.quiet && now_() - SY.t0 < 20 ? 30 : 12;
+  if (bestN >= need) {
     int cap = bestN < 3000 ? bestN : 3000, tcap = cap * 96; MkvLine *ml = malloc((size_t)cap * sizeof *ml); char *tb = malloc((size_t)tcap); SyncLine *rl = malloc((size_t)cap * sizeof *rl);
     Cue *xs = sync_xs();
     if (!ml || !tb || !rl || !xs) { free(ml); free(tb); free(rl); free(xs); sync_end(T("Couldn’t sync")); return; }
