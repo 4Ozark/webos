@@ -134,7 +134,7 @@ static struct {
   /* tray */ struct { int kind; /* 0 none 1 eps 2 src 3 aud 4 subs 5 epsrc */ char tabs[40][48]; int ntabs, tab, seasonList[40], season; int zone; /* 0 row 1 tabs 2 cols */ TItem row[MAXROW]; int n, idx, onBtn; TCol cols[4]; int ncols, c, r[4]; char title[300], epvid[80]; int backIdx, backTab; Mo open, openA; float ox, oy; Mo rowX, tabsX, colY[4], ringX, ringY, ringA, plY[4], plA[4]; float ringW, ringH; int loading; int armed; } tray;
   /* the sources tray's lists: one per addon serving the video (in the user's order), each asked when first seen */
   struct { char vid[80]; struct { char name[96]; Stream *items; float *h; int n, st, open; unsigned tok; Mo fa, bh, ia; float bhT; int leaving, seen, touched; } g[16]; int ng, on; } srcs; /* fa: how open its list is (alpha, slide), bh: its list's height as laid out now, ia: its rows fading in as they come */
-  /* subs */ SubEntry *ext; int next_; int nExt, extLoading; char curSub[1100]; struct { int list; char addon[64], lang[24]; } pick; Cue *cues; int ncues; double subDelay; VidTrack emb[16]; int nEmb; int autoSubDone; unsigned subReq; unsigned trSubTok; int locDone; struct { int has; char sub[1200], aud[28]; double delay; int haveDly; } pv; int pvU; /* pv: what the viewer chose here last time; pvU: what they changed this time (1 subtitle, 2 audio, 4 delay) */
+  /* subs */ SubEntry *ext; int next_; int nExt, extLoading; char curSub[1100]; struct { int list; char addon[64], lang[24]; } pick; Cue *cues; int ncues; double subDelay; VidTrack emb[16]; int nEmb; int autoSubDone; unsigned subReq; unsigned trSubTok; int locDone; struct { int has; char sub[1200], aud[28], file[256]; double delay; int haveDly; } pv; int pvU; /* pv: what the viewer chose here last time; pvU: what they changed this time (1 subtitle, 2 audio, 4 delay) */
   int curAud; int autoAudDone; int didResume;
   /* sound this TV can't decode (DTS, TrueHD): when the DTS track started playing, the codecs refused on this stream (error
      200), what was said */ struct { double playAt; char bad[4][16]; int nbad, said, gaveUp, switches;
@@ -390,17 +390,31 @@ static const char *dly_fmt(double v, int bare) { (void)v; return bare ? "%s%.2f"
    audio language and the subtitle delay. Only what the viewer changed is kept; the rest stays automatic. ---- */
 #define PV_MAX 200
 static int aud_list(VidTrack *ts, int max);
+static void stream_filename(char *out, size_t cap);
+/* which file a kept subtitle and delay were for: its name, else its size ("" unknown). A subtitle file and a delay are
+   timed to one release; another source of the same episode (another cut, intro, frame rate) needs its own */
+static void pv_file_id(char *out, size_t cap) { stream_filename(out, cap); for (char *c = out; *c; c++) *c = (char)tolower((unsigned char)*c); if (!out[0] && P.st.size > 0) snprintf(out, cap, "%.0f", P.st.size); }
 static cJSON *pv_obj(int make) { cJSON *n = store_node("pv"); if (!n && make) { n = cJSON_CreateObject(); store_set_node("pv", n); n = store_node("pv"); } return n; }
 static void pv_load(void) {
   memset(&P.pv, 0, sizeof P.pv); P.pvU = 0; if (P.isTrailer || !P.vid[0]) return; cJSON *o = pv_obj(0), *e = o ? cJSON_GetObjectItemCaseSensitive(o, P.vid) : NULL; if (!e) return;
-  const char *sv = js_str(e, "s", ""), *au = js_str(e, "a", ""); snprintf(P.pv.sub, sizeof P.pv.sub, "%s", sv); snprintf(P.pv.aud, sizeof P.pv.aud, "%s", au);
+  const char *sv = js_str(e, "s", ""), *au = js_str(e, "a", ""); snprintf(P.pv.sub, sizeof P.pv.sub, "%s", sv); snprintf(P.pv.aud, sizeof P.pv.aud, "%s", au); snprintf(P.pv.file, sizeof P.pv.file, "%s", js_str(e, "f", ""));
   if (cJSON_GetObjectItemCaseSensitive(e, "d")) { P.pv.haveDly = 1; P.pv.delay = js_num(e, "d", 0) / 1000.0; if (P.pv.delay > 120 || P.pv.delay < -120) P.pv.delay = 0; }
   P.pv.has = P.pv.sub[0] || P.pv.aud[0] || P.pv.haveDly; if (P.pv.haveDly) P.subDelay = P.pv.delay;
   if (P.pv.has) fprintf(stderr, "[pv] %s: sub \"%.40s\" audio \"%s\" delay %s%.1f s\n", P.vid, P.pv.sub, P.pv.aud, P.pv.haveDly ? "" : "(none) ", P.pv.delay);
 }
+/* once the stream is known: a subtitle file or a delay kept for another file (or for one not recorded) is not reused;
+   the language is, through the usual choice. Off, the file's own tracks by language and the audio stay as kept */
+static void pv_for_file(void) {
+  if (!P.pv.has) return; char cur[256]; pv_file_id(cur, sizeof cur); int same = cur[0] && !strcmp(cur, P.pv.file);
+  if (same) return;
+  if (!strncmp(P.pv.sub, "ext|", 4)) { fprintf(stderr, "[pv] the kept subtitle was for another file (%s): chosen again for this one\n", P.pv.file[0] ? P.pv.file : "not recorded"); P.pv.sub[0] = 0; }
+  if (P.pv.haveDly) { fprintf(stderr, "[pv] the kept delay was for another file: not applied\n"); P.pv.haveDly = 0; P.pv.delay = 0; P.subDelay = 0; }
+  P.pv.has = P.pv.sub[0] || P.pv.aud[0];
+}
 static void pv_flush(void) {
   if (!P.pvU || P.isTrailer || !P.vid[0] || getenv("SB_PLAY_NOSAVE")) { P.pvU = 0; return; }
   cJSON *o = pv_obj(1); cJSON *e = o ? pv_rec(o, P.vid, 1) : NULL; if (!e) { P.pvU = 0; return; }
+  { char f[256]; pv_file_id(f, sizeof f); pv_set_str(e, "f", f); } /* the file the subtitle and delay below are timed to */
   if (P.pvU & 1) { char v[1200]; v[0] = 0;
     if (!strcmp(P.curSub, "off")) snprintf(v, sizeof v, "off");
     else if (!strncmp(P.curSub, "emb:", 4)) { int n = atoi(P.curSub + 4), k = -1, ord = 0; for (int i = 0; i < P.nEmb; i++) if (P.emb[i].idx == n) k = i;
@@ -450,8 +464,11 @@ static void auto_sub(void) {
     if (pick) { fprintf(stderr, "[subs] matching the release \"%.80s\": %s (%s, fit %d)\n", rel, pick->rel[0] ? pick->rel : pick->label, pick->addon, top);
       P.autoSubDone = 1; set_ext_sub(kind, pick); sync_auto_arm(); }
     return; }
-  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
+  /* the viewer's own subtitle addons first (SubDL and the like), the built-in OpenSubtitles list after; while the addons
+     are still answering (10 s at most), wait for them */
   for (int i = 0; i < P.nAdx; i++) if (lang_match(P.adx[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(2, &P.adx[i]); sync_auto_arm(); return; }
+  if (P.adxLoading && !P.matchWaitOver) { if (!P.matchWaitAt) P.matchWaitAt = now_() + 10; return; }
+  for (int i = 0; i < P.nExt; i++) if (lang_match(P.ext[i].lang, w)) { P.autoSubDone = 1; set_ext_sub(1, &P.ext[i]); sync_auto_arm(); return; }
 }
 /* a trailer's captions (IMDb's or YouTube's): handed over with the trailer, read when the CC button turns them on */
 static TrailerSub trSubs[TRAILER_MAX_SUBS], trNext[TRAILER_MAX_SUBS]; static int trSubsN, trNextN;
@@ -1694,7 +1711,7 @@ static void play_stream(const Stream *s, const char *vid, double startAt) {
   if (!strcmp(P.type, "other")) { memcpy(trSubs, trNext, sizeof trSubs); trSubsN = trNextN; snprintf(P.trName, sizeof P.trName, "%.*s", (int)strcspn(s->name, "\n"), s->name); }
   else trSubsN = 0;
   trNextN = 0;
-  P.st = *s; snprintf(P.url, sizeof P.url, "%s", s->url); snprintf(P.alt, sizeof P.alt, "%s", nextAlt); nextAlt[0] = 0;
+  P.st = *s; snprintf(P.url, sizeof P.url, "%s", s->url); snprintf(P.alt, sizeof P.alt, "%s", nextAlt); nextAlt[0] = 0; pv_for_file();
   if ((s->hdrs[0] || s->rhdrs[0]) && !strncmp(s->url, "http", 4)) { hproxy_url(s->url, s->hdrs, s->rhdrs, P.url, sizeof P.url); fprintf(stderr, "[player] the stream wants its own headers: through %s\n", P.url); } /* every request for it carries them */
   char info[700]; sb_stream_info(s, info, sizeof info); snprintf(P.sname, sizeof P.sname, "%s", info); snprintf(P.saddon, sizeof P.saddon, "%s", s->addon);
   if (!P.isTrailer && strcmp(P.type, "other")) sb_remember_stream(P.id, P.vid, s); /* the torrent itself, resolved again next time */
