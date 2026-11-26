@@ -27,7 +27,10 @@ void subs_list(const char *type, const char *vid, void (*cb)(SubEntry *subs, int
 typedef struct { char type[16], vid[80], url[4096], filename[256], hash[24]; double size; int hashable; double fps; } SubQuery; /* fps: the picture's, when known (Auto-sync) */
 void subs_find(const SubQuery *q, const SubEntry *own, int nown, void (*cb)(SubEntry *subs, int n, int final, int ok, void *ud), void *ud);
 int  subs_addons_for(const char *type, const char *vid);   /* installed subtitles addons serving it */
-int  subs_os_hash(const char *url, double *size, char out[17]);  /* worker threads only (it blocks); *size: known size or 0 */
+int  subs_os_hash(const char *url, double *size, char out[17], char *eff, size_t effCap); /* worker threads only (it blocks); *size: known size or 0; eff (may be NULL): the address the link led to */
+/* a video file's name from an address's last part ("Show.S01E02.1080p.mkv"): 1 when it looks like one (a video
+   extension), else 0 and nothing written (debrid links that end with an id or a number say nothing) */
+int  subs_name_from_url(const char *url, char *out, size_t cap);
 int  subs_hash_of(const char *url, char out[24], double *size);  /* the hash subs_find worked out for this url, if it did (any thread) */
 struct cJSON;
 void subs_entry_facts(SubEntry *e, const struct cJSON *s);       /* an answer's entry: its file's name (rel) and whether the hash found it (hm) */

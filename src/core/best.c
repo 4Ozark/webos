@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #ifndef SB_BEST_PURE
 #include "core/app.h"
@@ -251,6 +252,26 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   return 1;
 }
 static const TvCaps FALLBACK = { 1080, 0, 0, 0, 0, 0 };
+/* Real-Debrid's links end with the file's name and lead straight to it, so the file's hash and name are found and the
+   subtitle made for it is chosen. TorBox's (through Torrentio and the like) end with an id and resolve the file on each
+   request: the hash and the file's own tracks often time out. Between two debrid copies of one file, Real-Debrid's */
+static int is_rd(const Stream *s) {
+  char raw[SB_URL_MAX + 800], l[SB_URL_MAX + 800]; snprintf(raw, sizeof raw, "%s %s %s", s->name, s->addon, s->url); lower(raw, l, sizeof l);
+  if (s->p2p) return 0;
+  return strstr(l, "real-debrid") || strstr(l, "realdebrid") || strstr(l, "[rd") || strstr(l, "rd+") || strstr(l, "rd\xe2\x9a\xa1") || has_word(l, "rd");
+}
+static void file_of(const Stream *s, char *out, size_t cap) { /* the file's name: the addon's, else a line of the description that ends like one */
+  if (s->filename[0]) { lower(s->filename, out, cap); return; }
+  out[0] = 0; char t[512]; snprintf(t, sizeof t, "%s", s->title);
+  for (char *ln = t, *nx; ln; ln = nx) { nx = strchr(ln, '\n'); if (nx) *nx++ = 0; while (*ln == ' ') ln++; size_t n = strlen(ln);
+    if (n > 8 && (!strcasecmp(ln + n - 4, ".mkv") || !strcasecmp(ln + n - 4, ".mp4") || !strcasecmp(ln + n - 4, ".avi"))) { lower(ln, out, cap); return; } }
+}
+static int same_file(const Stream *a, const Stream *b) {
+  char fa[512], fb[512]; file_of(a, fa, sizeof fa); file_of(b, fb, sizeof fb);
+  if (fa[0] && fb[0]) return !strcmp(fa, fb);
+  char ta[2048], tb[2048]; best_stream_info(a, ta, sizeof ta); best_stream_info(b, tb, sizeof tb); double ma = size_mb(ta), mb = size_mb(tb); /* no names: the same size */
+  return ma > 0 && mb > 0 && fabs(ma - mb) <= ma * .005;
+}
 /* c NULL: the kept caps, else a 1080p panel (a caller asking only for the summary line); mbps < 0: the measured speed */
 int best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, BestRate *out) {
   if (!c) c = best_caps(); if (!c) c = &FALLBACK; if (mbps < 0) mbps = best_net_mbps();
@@ -281,6 +302,9 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
   }
   if (!best && m) { int top = tk[0]; for (int i = 1; i < m; i++) if (tk[i] < top) top = tk[i];
     for (int i = 0; i < m; i++) if (tk[i] == top && (!best || rs[i].mute < best->mute || (rs[i].mute == best->mute && (rs[i].need < best->need || (rs[i].need == best->need && rs[i].sc > best->sc))))) best = &rs[i]; }
+  if (best && !is_rd(best->s)) { const BestRate *rd = NULL; /* the same file is often offered by Real-Debrid too: that one */
+    for (int i = 0; i < m && !rd; i++) if (&rs[i] != best && rs[i].mute == best->mute && rs[i].key == best->key && is_rd(rs[i].s) && same_file(rs[i].s, best->s)) rd = &rs[i];
+    if (rd) best = rd; }
   const Stream *s = best ? best->s : NULL; if (best && out) *out = *best;
   free(rs); free(tk); maxMode = 0; return s;
 }

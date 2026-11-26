@@ -54,4 +54,7 @@ typedef struct NetRange NetRange;
 NetRange *net_range_new(void);
 int       net_range_get(NetRange *r, const char *url, long long start, long len, unsigned char **out, long *got, long long *total, int *httpStatus, int timeoutMs);
 void      net_range_free(NetRange *r);
+/* the address the last good read ended up at after its redirects (NULL: none yet). Debrid addons hand out a link that
+   resolves the file on every request (seconds each, for some services); the next reads go straight there */
+const char *net_range_url(NetRange *r);
 #endif
