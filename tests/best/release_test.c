@@ -73,6 +73,16 @@ int main(void) {
     setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 3, 169, &c, 500, &r) == &en, "top quality: English HDR10 over Hindi DV"); unsetenv("SB_BEST_MAX"); }
   { const Stream *l[] = { &hinOnly, &hin }; check(best_pick(l, 2, 169, &c, 500, &r) == &hin, "no English-led release: the one that has English inside"); }
 
+  /* TrueHD: a remux with only TrueHD is last on a TV that can't play it, first in top quality on one that does */
+  { Stream rmx, web; best_set_langs("eng", "ara");
+    mk(&rmx, "[RD+] Torrentio\n4k DV | HDR10+", "https://torrentio.strem.fun/realdebrid/x/p/1/r.mkv", "Interstellar 2014 2160p PROPER IMAX REMUX DV HDR10+ TrueHD 7.1 Atmos-jennaortegaUHD\n\xf0\x9f\x91\xa4 266 \xf0\x9f\x92\xbe 95.63 GB", "");
+    mk(&web, "[TB+] Torrentio\n4k DV", "https://torrentio.strem.fun/torbox/x/q/1", "Interstellar.2014.IMAX.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-XYZ.mkv\n\xf0\x9f\x92\xbe 27 GB", "Interstellar.2014.IMAX.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-XYZ.mkv");
+    const Stream *l[] = { &rmx, &web }; static const TvCaps th = { 2160, 1, 1, 1, 0, 1 };
+    setenv("SB_BEST_MAX", "1", 1);
+    check(best_pick(l, 2, 169, &c, 500, &r) == &web, "top quality, TV without TrueHD: the WEB-DL with sound");
+    check(best_pick(l, 2, 169, &th, 500, &r) == &rmx, "top quality, TV that plays TrueHD: the remux");
+    unsetenv("SB_BEST_MAX"); }
+
   /* an Italian viewer keeps the Italian release */
   best_set_langs("ita", "ita");
   { BestRate a; best_rate(&tb, &c, 500, 45, &a); check(a.subs >= 0, "an Italian viewer: the ITA release is not marked down"); }

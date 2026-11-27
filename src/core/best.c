@@ -415,12 +415,12 @@ typedef struct { void (*cb)(const TvCaps *, void *); void *ud; } CapsWait;
 static CapsWait capsWaits[8]; static int nCapsWaits;
 const TvCaps *best_caps(void) {
   if (capsKnown < 0) { const cJSON *n = store_node("tvCaps2"); capsKnown = 0;
-    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = js_bool(n, "truehd", 0); capsKnown = 1;
+    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = js_bool(n, "truehd", 0) || best_learned("truehd") == 1; capsKnown = 1;
       caps.dts = best_learned("dts") == 1 || (best_learned("dts") < 0 && js_bool(n, "dtsCfg", 0)); } } /* the old "dts" (a guess from the webOS release) no longer counts */ /* the old "dts" (a guess from the webOS release) no longer counts */
   return capsKnown > 0 ? &caps : NULL;
 }
 /* the learned flags sit beside the asked ones in tvCaps2 ("dtsLearned", "hlsHevcOk", "dv81Hls"): kept when the caps are asked again */
-static const char *learned_key(const char *what) { return !strcmp(what, "dts") ? "dtsLearned" : what; }
+static const char *learned_key(const char *what) { return !strcmp(what, "dts") ? "dtsLearned" : !strcmp(what, "truehd") ? "truehdLearned" : what; }
 /* Settings > Audio > DTS sound: "auto" (playback finds out), "convert" (always converted), "off" (the TV plays it) */
 int best_dts_mode(void) { const char *m = store_get("dtsMode", "auto"); return !strcmp(m, "convert") ? 1 : !strcmp(m, "off") ? 2 : 0; }
 int best_learned(const char *what) {
@@ -432,6 +432,7 @@ void best_learn(const char *what, int yes) {
   const cJSON *o = store_node("tvCaps2"); cJSON *n = cJSON_IsObject(o) ? cJSON_Duplicate(o, 1) : cJSON_CreateObject(); if (!n) return;
   cJSON_DeleteItemFromObjectCaseSensitive(n, learned_key(what)); cJSON_AddBoolToObject(n, learned_key(what), yes != 0); store_set_node("tvCaps2", n);
   if (!strcmp(what, "dts") && capsKnown > 0) caps.dts = yes != 0;
+  if (!strcmp(what, "truehd") && capsKnown > 0) caps.truehd = yes != 0;
   fprintf(stderr, "[best] learned: %s %s\n", what, yes ? "yes" : "no");
 }
 /* a luna answer read the web's way: anything set and not false counts */
@@ -483,11 +484,12 @@ void best_caps_probe(void (*cb)(const TvCaps *c, void *ud), void *ud) {
 static void caps_landed(const TvCaps *c, int sure, int dtsCfg) {
   caps = *c; capsKnown = 1; capsAsking = 0;
   if (best_learned("dts") >= 0) caps.dts = best_learned("dts"); /* learned while the worker asked */
+  if (best_learned("truehd") >= 0) caps.truehd = best_learned("truehd");
   if (sure) { /* kept only when the TV answered: a guess serves this run only */
   cJSON *n = cJSON_CreateObject(); cJSON_AddNumberToObject(n, "maxRes", c->maxRes); cJSON_AddBoolToObject(n, "hdr", c->hdr); cJSON_AddBoolToObject(n, "dv", c->dv);
   cJSON_AddBoolToObject(n, "av1", c->av1); cJSON_AddBoolToObject(n, "truehd", c->truehd); if (dtsCfg >= 0) cJSON_AddBoolToObject(n, "dtsCfg", dtsCfg);
-  static const char *const KEEP[] = { "dtsLearned", "hlsHevcOk", "dv81Hls" }; /* what playback taught stays */
-  for (int i = 0; i < 3; i++) { int v = best_learned(KEEP[i]); if (v >= 0) cJSON_AddBoolToObject(n, KEEP[i], v); }
+  static const char *const KEEP[] = { "dtsLearned", "hlsHevcOk", "dv81Hls", "truehdLearned" }; /* what playback taught stays */
+  for (int i = 0; i < 4; i++) { int v = best_learned(KEEP[i]); if (v >= 0) cJSON_AddBoolToObject(n, KEEP[i], v); }
   store_set_node("tvCaps2", n); }
   int nw = nCapsWaits; CapsWait w[8]; memcpy(w, capsWaits, sizeof w); nCapsWaits = 0;
   for (int i = 0; i < nw; i++) w[i].cb(&caps, w[i].ud);

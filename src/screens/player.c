@@ -660,12 +660,12 @@ static void sync_tick(void) {
 
 /* ---- audio ---- */
 static void set_audio(int i) { P.curAud = i; video_select_audio(i); P.infoKey[0] = 0; }
-/* ---- sound this TV can't decode: DTS where it was seen failing (or not yet seen playing), TrueHD always (passed
-   through to a receiver only), and any codec the TV refused on this stream (error 200: the picture plays on) ---- */
+/* ---- sound this TV can't decode: DTS where it was seen failing (or not yet seen playing), TrueHD where it was seen
+   failing (some sets decode it, others only pass it to a receiver: tried first, learned by playing), and any codec the TV refused on this stream (error 200: the picture plays on) ---- */
 static int aud_kind(const char *codec) { /* 1 DTS, 2 TrueHD, 0 another; the TV's names ("dts") and Matroska's ("A_DTS") alike */
   char c[32]; lower(codec, c, sizeof c); return strstr(c, "dts") ? 1 : (strstr(c, "truehd") || strstr(c, "mlp")) ? 2 : 0; }
 static int aud_bad(const VidTrack *t) {
-  int k = aud_kind(t->codec), dm = best_dts_mode(); if (k == 2 || (k == 1 && (dm == 1 || (dm == 0 && best_learned("dts") == 0) || getenv("SB_DTS_CONVERT")))) return 1; /* DTS: Convert always; Auto once the TV was seen failing it; Off left to the TV */ /* (SB_DTS_CONVERT: development, a TV that plays DTS converts it anyway) */
+  int k = aud_kind(t->codec), dm = best_dts_mode(); if ((k == 2 && best_learned("truehd") == 0) || (k == 1 && (dm == 1 || (dm == 0 && best_learned("dts") == 0) || getenv("SB_DTS_CONVERT")))) return 1; /* DTS: Convert always; Auto once the TV was seen failing it; Off left to the TV */ /* (SB_DTS_CONVERT: development, a TV that plays DTS converts it anyway) */
   for (int i = 0; i < P.dts.nbad; i++) if (t->codec[0] && !strcasecmp(P.dts.bad[i], t->codec)) return 1;
   return 0;
 }
@@ -833,7 +833,9 @@ static void dts_tick(void) {
   if (unsup) { if (kind == 1 && !best_dts_mode()) { best_learn("dts", 0); fprintf(stderr, "[dts] auto: this TV refused DTS, converting from now on\n"); } int known = 0; for (int i = 0; i < P.dts.nbad; i++) if (!strcasecmp(P.dts.bad[i], t->codec)) known = 1;
     if (!known && t->codec[0] && P.dts.nbad < 4) snprintf(P.dts.bad[P.dts.nbad++], sizeof P.dts.bad[0], "%s", t->codec); }
   if (kind == 1 && !unsup && !best_dts_mode() && best_learned("dts") < 0 && video_state() == VID_PLAYING) { if (!P.dts.playAt) P.dts.playAt = now_(); else if (now_() - P.dts.playAt >= 3) { best_learn("dts", 1); fprintf(stderr, "[dts] auto: this TV plays DTS itself\n"); } }
+  else if (kind == 2 && !unsup && best_learned("truehd") < 0 && video_state() == VID_PLAYING) { if (!P.dts.playAt) P.dts.playAt = now_(); else if (now_() - P.dts.playAt >= 3) { best_learn("truehd", 1); fprintf(stderr, "[truehd] this TV plays TrueHD itself\n"); } }
   else P.dts.playAt = 0;
+  if (unsup && kind == 2 && best_learned("truehd") < 0) { best_learn("truehd", 0); fprintf(stderr, "[truehd] this TV refused TrueHD, converting from now on\n"); }
   if (!unsup && !aud_bad(t)) return;
   const char *want = !strcmp(store_get("enableDefaultAudioTrack", "false"), "true") ? store_get("defaultAudioTrack", "") : "";
   int pick = -1, score = -1;
