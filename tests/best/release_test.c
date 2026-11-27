@@ -83,6 +83,18 @@ int main(void) {
     check(best_pick(l, 2, 169, &th, 500, &r) == &rmx, "top quality, TV that plays TrueHD: the remux");
     unsetenv("SB_BEST_MAX"); }
 
+  /* top quality: the biggest file inside the best picture; a dub-led one never; the last release before size */
+  { Stream big, small, dub; best_set_langs("eng", "ara");
+    mk(&big, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/s/1/b.mkv", "Movie.2020.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.TrueHD.7.1.Atmos-FGT.mkv\n\xf0\x9f\x92\xbe 70 GB", "Movie.2020.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.TrueHD.7.1.Atmos-FGT.mkv");
+    mk(&small, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/t/1/s.mkv", "Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv\n\xf0\x9f\x92\xbe 20 GB", "Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv");
+    mk(&dub, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/u/1/d.mkv", "Movie.2020.ITA.ENG.2160p.UHD.BluRay.REMUX.DV.HDR.TrueHD.Atmos-XX.mkv\n\xf0\x9f\x92\xbe 90 GB", "Movie.2020.ITA.ENG.2160p.UHD.BluRay.REMUX.DV.HDR.TrueHD.Atmos-XX.mkv");
+    static const TvCaps th = { 2160, 1, 1, 1, 0, 1 }; const Stream *l[] = { &small, &dub, &big };
+    setenv("SB_BEST_MAX", "1", 1); best_set_prev("");
+    check(best_pick(l, 3, 120, &th, 500, &r) == &big, "top quality: the 70 GB DV remux over the 20 GB DV WEB-DL and the 90 GB ITA-ENG");
+    best_set_prev("Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv");
+    check(best_pick(l, 3, 120, &th, 500, &r) == &small, "top quality: the release played last before size");
+    best_set_prev(""); unsetenv("SB_BEST_MAX"); }
+
   /* an Italian viewer keeps the Italian release */
   best_set_langs("ita", "ita");
   { BestRate a; best_rate(&tb, &c, 500, 45, &a); check(a.subs >= 0, "an Italian viewer: the ITA release is not marked down"); }

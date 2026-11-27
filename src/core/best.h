@@ -40,7 +40,7 @@ int  best_play_on(void);   /* Play starts a stream by itself: the best stream, o
 int  best_sub_fit(const char *stream, const char *sub);
 
 /* ---- the score (pure: no state, unit-testable) ---- */
-typedef struct { const Stream *s; double sc, need, cap; int mute; long key; int res, hr, cont, subs, lr; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it.
+typedef struct { const Stream *s; double sc, need, cap; int mute; long key; int res, hr, cont, subs, lr; double mb; char sum[192]; } BestRate;   /* mb: the file size in MB, 0 unknown */   /* mute: its text names only DTS / TrueHD and this TV can't decode it.
    res / hr: its picture and HDR rank (top quality's first two steps); cont: 2 the same release group as the last stream played
    for this title, 1 the same source and service, 0 neither; subs: +1 a release that likely carries subtitles (many
    languages, MULTI, a WEBMux), -1 a local release whose own language comes first (ITA-ENG, VFF): subtitles rarely fit it.

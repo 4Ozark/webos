@@ -268,7 +268,7 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   if (!o) return 1;
   { unsigned lm = langs_named(t, l); int fl = lead_lang(s), ia = lang_ia(), multi = has_word(l, "multi") || has_word(l, "dual");
     o->lr = (fl >= 0 && fl != ia) ? ((lm & (1u << ia)) || multi ? 1 : 0) : (!lm || (lm & (1u << ia))) ? 2 : multi ? 1 : 0; }
-  o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->res = rr; o->cont = cont; o->subs = subs; if (resOut) *resOut = r;
+  o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->mb = mb; o->res = rr; o->cont = cont; o->subs = subs; if (resOut) *resOut = r;
   /* top quality, in this order (each only between streams equal in the ones before):
      1. picture and source: 4K Remux, 4K BluRay, 4K WEB-DL, 4K WEBRip, (4K, source not named), then the same at 1080p, HDTV, lower
      2. HDR: Dolby Vision (on a TV with it; without, a file that has HDR10 under it counts as HDR10), HDR10+, HDR10, HLG, none
@@ -321,14 +321,16 @@ int best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, Best
    carries without buffering: a file's average bitrate (its size over the running time) plus 30% headroom must
    fit the speed measured when the setting was switched on. The first resolution with such a stream wins (its
    best one); when nothing fits anywhere, the lightest stream at the TV's resolution. */
-/* top quality's order: sound that plays here, the picture (resolution, then HDR), then the release played last for
-   this title and a release that likely has subtitles (a sharper source or sound is worth less than a subtitle that
-   fits), then source and sound (key), then the surest (debrid, seeds) */
+/* top quality's order: sound that plays here; the picture (resolution, then DV > HDR10+ > HDR10 > HLG > SDR); the
+   release played last for this title (its subtitle fits); not a release whose subtitles won't fit (a dub-led one);
+   then the biggest file (the most bitrate: a remux over an encode); then likely subtitles, source and sound, the surest */
 static int max_better(const BestRate *a, const BestRate *b) {
   if (a->mute != b->mute) return a->mute < b->mute;
   if (a->res != b->res) return a->res > b->res;
   if (a->hr != b->hr) return a->hr > b->hr;
   if (a->cont != b->cont) return a->cont > b->cont;
+  if ((a->subs >= 0) != (b->subs >= 0)) return a->subs >= 0;
+  if (a->mb != b->mb) return a->mb > b->mb;
   if (a->subs != b->subs) return a->subs > b->subs;
   if (a->key != b->key) return a->key > b->key;
   return a->sc > b->sc; }
