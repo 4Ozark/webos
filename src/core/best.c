@@ -214,14 +214,21 @@ static int first_lang(const char *file) {
 /* how likely a release carries subtitles that fit: many languages (a multi-language mux ships their subtitles too),
    MULTI, subs named: +1; a local release whose own language leads, not the user's nor English: -1 (its subtitles are
    in that language, and others' are timed to the international release) */
+/* the language a release leads with: the first one its file name names, else its title's first line; a title in
+   Cyrillic (a Russian tracker's) leads with its Russian dub. -1 when nothing tells */
+static int lead_lang(const Stream *s) {
+  char f[512]; file_of(s, f, sizeof f); int fl = f[0] ? first_lang(f) : -1; if (fl >= 0) return fl;
+  char t[512]; snprintf(t, sizeof t, "%s", s->title); char *e = strchr(t, '\n'); if (e) *e = 0;
+  fl = first_lang(t); if (fl >= 0) return fl;
+  for (const unsigned char *p = (const unsigned char *)t; *p; p++) if ((*p == 0xd0 || *p == 0xd1) && p[1] >= 0x80 && p[1] <= 0xbf) return lang_index("rus");
+  return -1; }
 static int lang_ia(void) { int ia = lang_index(prefAudio); return ia >= 0 ? ia : lang_index("eng"); }
 static int lang_ours(int li) { return li == lang_ia() || li == lang_index("eng") || li == lang_index(prefSubs); } /* the user's audio or subtitle language, or English */
 static int subs_likely(const Stream *s, const char *raw, const char *l) {
   unsigned m = langs_named(raw, l); int nl = 0; for (unsigned x = m; x; x &= x - 1) nl++;
   int sc = (nl >= 3 || has_word(l, "multi") || has_word(l, "msubs") || has_word(l, "multisub") || has_word(l, "multisubs") || strstr(l, "webmux")
     || has_word(l, "subs") || has_word(l, "subbed") || has_word(l, "esub") || has_word(l, "esubs")) ? 1 : 0;
-  char f[512]; file_of(s, f, sizeof f); if (!f[0]) { snprintf(f, sizeof f, "%s", s->title); char *nl2 = strchr(f, '\n'); if (nl2) *nl2 = 0; }
-  int fl = first_lang(f), ia = lang_index(prefAudio), is = lang_index(prefSubs), ie = lang_index("eng");
+  int fl = lead_lang(s), ia = lang_index(prefAudio), is = lang_index(prefSubs), ie = lang_index("eng");
   if (fl >= 0 && fl != ie && fl != ia && fl != is) sc -= 1;
   return sc; }
 static int maxMode; /* bestMax, read once per pick */
@@ -249,7 +256,7 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   if (strstr(au, "Atmos")) sc += 6;
   if (has_word(l, "av1") && !c->av1) sc -= 200; /* nothing to fall back to: the picture won't decode */
   sc += lang_score(t, l); /* the user's languages (settings) */
-  { int fl = -1; char f[512]; file_of(s, f, sizeof f); if (!f[0]) { snprintf(f, sizeof f, "%s", s->title); char *e = strchr(f, '\n'); if (e) *e = 0; } fl = first_lang(f);
+  { int fl = lead_lang(s);
     if (fl >= 0 && !lang_ours(fl) && (langs_named(t, l) & ((1u << lang_ia()) | (1u << lang_index("eng"))))) sc -= 60; } /* a dub that leads ("Hindi-English", "ITA-ENG"): its first track is the dub, so naming English earns nothing */
   int cont = 0; if (prevRel[0] && (first_lang(prevRel) < 0 || lang_ours(first_lang(prevRel)))) { /* (a release that led with a dub is not one to keep to) */ char f[512]; file_of(s, f, sizeof f); int fit = best_sub_fit(f[0] ? f : s->title, prevRel); cont = fit >= 60 ? 2 : fit >= 40 ? 1 : 0; } /* the release played last for this title */
   int subs = subs_likely(s, t, l);
