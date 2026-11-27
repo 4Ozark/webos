@@ -292,7 +292,7 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   size_t k = 0; o->sum[0] = 0; for (int i = 0; i < np; i++) k += snprintf(o->sum + k, k < sizeof o->sum ? sizeof o->sum - k : 0, "%s%s", i ? "  \xc2\xb7  " : "", parts[i]);
   return 1;
 }
-static const TvCaps FALLBACK = { 1080, 0, 0, 0, 0, 0 };
+static const TvCaps FALLBACK = { 1080, 0, 0, 0, 0, 1 };
 /* Real-Debrid's links end with the file's name and lead straight to it, so the file's hash and name are found and the
    subtitle made for it is chosen. TorBox's (through Torrentio and the like) end with an id and resolve the file on each
    request: the hash and the file's own tracks often time out. Between two debrid copies of one file, Real-Debrid's */
@@ -415,7 +415,7 @@ typedef struct { void (*cb)(const TvCaps *, void *); void *ud; } CapsWait;
 static CapsWait capsWaits[8]; static int nCapsWaits;
 const TvCaps *best_caps(void) {
   if (capsKnown < 0) { const cJSON *n = store_node("tvCaps2"); capsKnown = 0;
-    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = js_bool(n, "truehd", 0) || best_learned("truehd") == 1; capsKnown = 1;
+    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = 1; capsKnown = 1; /* TrueHD: this TV plays it (fixed, as asked: an LG that decodes it on its own speakers) */
       caps.dts = best_learned("dts") == 1 || (best_learned("dts") < 0 && js_bool(n, "dtsCfg", 0)); } } /* the old "dts" (a guess from the webOS release) no longer counts */ /* the old "dts" (a guess from the webOS release) no longer counts */
   return capsKnown > 0 ? &caps : NULL;
 }
@@ -459,7 +459,7 @@ static void *caps_worker(void *arg) {
      A wrong "no" only costs a little score; a wrong "yes" would pick a stream that plays without sound or
      picture, so every doubt is a no. */
   int v = webos_major(), dtsCfg = -1;
-  c.dts = 0; c.av1 = v >= 6 || (v == 5 && c.maxRes == 2160); c.truehd = 0;
+  c.dts = 0; c.av1 = v >= 6 || (v == 5 && c.maxRes == 2160); c.truehd = 1; /* fixed: this TV plays TrueHD */
   r = plat_luna_call("luna://com.webos.service.config/getConfigs", "{\"configNames\":[\"tv.model.*\"]}", 3000);
   j = r ? cJSON_Parse(r) : NULL; free(r); k = cJSON_GetObjectItemCaseSensitive(j, "configs");
   if (cJSON_IsObject(k)) { const cJSON *e; cJSON_ArrayForEach(e, k) { if (!e->string || !cJSON_IsBool(e)) continue; /* tv.model.supportDTS and the like, on firmware that has one */
@@ -484,7 +484,7 @@ void best_caps_probe(void (*cb)(const TvCaps *c, void *ud), void *ud) {
 static void caps_landed(const TvCaps *c, int sure, int dtsCfg) {
   caps = *c; capsKnown = 1; capsAsking = 0;
   if (best_learned("dts") >= 0) caps.dts = best_learned("dts"); /* learned while the worker asked */
-  if (best_learned("truehd") >= 0) caps.truehd = best_learned("truehd");
+  caps.truehd = 1;
   if (sure) { /* kept only when the TV answered: a guess serves this run only */
   cJSON *n = cJSON_CreateObject(); cJSON_AddNumberToObject(n, "maxRes", c->maxRes); cJSON_AddBoolToObject(n, "hdr", c->hdr); cJSON_AddBoolToObject(n, "dv", c->dv);
   cJSON_AddBoolToObject(n, "av1", c->av1); cJSON_AddBoolToObject(n, "truehd", c->truehd); if (dtsCfg >= 0) cJSON_AddBoolToObject(n, "dtsCfg", dtsCfg);
