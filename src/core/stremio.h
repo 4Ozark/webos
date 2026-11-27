@@ -114,6 +114,8 @@ void sb_stream_info(const Stream *s, char *out, size_t cap);
 /* the last played stream of a title/episode */
 int  sb_resume_stream(const char *id, const char *vid, Stream *out);
 void sb_remember_stream(const char *id, const char *vid, const Stream *s);
+/* the release of the stream played last for this title, any episode (its file name, else its title): 0 when none */
+int  sb_last_release(const char *id, char *out, size_t cap);
 
 /* ---- subtitles ---- */
 /* from: where it came from (the stream itself, a subtitles addon, the OpenSubtitles fallback); addon: that source's

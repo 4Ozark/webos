@@ -766,6 +766,13 @@ int sb_resume_stream(const char *id, const char *vid, Stream *out) {
   copy_str(out->filename, sizeof out->filename, js_str(s, "filename", "")); copy_str(out->hash, sizeof out->hash, js_str(s, "hash", "")); out->size = js_num(s, "size", 0);
   return out->url[0] != 0;
 }
+int sb_last_release(const char *id, char *out, size_t cap) {
+  out[0] = 0; const cJSON *all = store_node("streams"), *s; size_t n = strlen(id); if (!cJSON_IsObject(all) || !n) return 0;
+  cJSON_ArrayForEach(s, all) { /* remembered in order: the last one that matches is the latest */
+    if (!s->string || strncmp(s->string, id, n) || s->string[n] != '_' || !resume_valid(s)) continue;
+    const char *f = js_str(s, "filename", ""), *t = js_str(s, "title", ""); copy_str(out, cap, f[0] ? f : t); }
+  return out[0] != 0;
+}
 void sb_remember_stream(const char *id, const char *vid, const Stream *s) {
   if (!s->url[0]) return;
   cJSON *all = store_node("streams"); if (!cJSON_IsObject(all)) { all = cJSON_CreateObject(); store_set_node("streams", all); }

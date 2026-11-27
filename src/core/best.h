@@ -40,7 +40,10 @@ int  best_play_on(void);   /* Play starts a stream by itself: the best stream, o
 int  best_sub_fit(const char *stream, const char *sub);
 
 /* ---- the score (pure: no state, unit-testable) ---- */
-typedef struct { const Stream *s; double sc, need, cap; int mute; long key; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it */
+typedef struct { const Stream *s; double sc, need, cap; int mute; long key; int res, hr, cont, subs; char sum[192]; } BestRate;   /* mute: its text names only DTS / TrueHD and this TV can't decode it.
+   res / hr: its picture and HDR rank (top quality's first two steps); cont: 2 the same release group as the last stream played
+   for this title, 1 the same source and service, 0 neither; subs: +1 a release that likely carries subtitles (many
+   languages, MULTI, a WEBMux), -1 a local release whose own language comes first (ITA-ENG, VFF): subtitles rarely fit it */
 /* 0 = the stream is left out (a cam, an uncached debrid file, a thin swarm, above the panel) */
 int  best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, BestRate *out);
 /* the pick among n streams: the panel's own resolution first, then lower ones, each only among streams the line
@@ -64,6 +67,10 @@ void best_audio_of(const char *label, char *out, size_t cap);
 typedef void (*BestStatusCb)(const char *text, void *ud);
 typedef void (*BestDoneCb)(const Stream *s, const BestRate *r, void *ud);
 void best_set_langs(const char *audio, const char *subs); /* the user's languages: streams in them first, ones naming only others last */
+/* the release last played for this title (its file name, else its title): the next pick keeps to the same release,
+   so the subtitle that fitted it fits again. "" = none. best_set_title looks it up from the remembered streams */
+void best_set_prev(const char *release);
+void best_set_title(const char *id);
 unsigned best_choose(const char *type, const char *vid, int durMin, BestStatusCb status, BestDoneCb done, void *ud);
 void best_choose_cancel(unsigned tok);
 void best_skip(const char *url);       /* a stream that failed to play: left out of the next choices (until the app restarts) */
