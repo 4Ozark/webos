@@ -55,6 +55,17 @@ int main(void) {
   best_set_prev("");
   { const Stream *l[] = { &flux1080, &rd }; setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 2, 45, &c, 5, &r) == &rd, "top quality: 4K on a 5 Mbps line"); unsetenv("SB_BEST_MAX"); }
 
+  /* Interstellar: a Hindi-led dual audio release, played last, against an English one */
+  Stream hin, en; best_set_langs("eng", "ara");
+  mk(&hin, "[RD+] Torrentio\n4k HDR", "https://torrentio.strem.fun/realdebrid/x/m/1/i.mkv",
+     "Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv\n\xf0\x9f\x92\xbe 24.1 GB\n\xf0\x9f\x87\xae\xf0\x9f\x87\xb3 / \xf0\x9f\x87\xac\xf0\x9f\x87\xa7", "Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv");
+  mk(&en, "[RD+] Torrentio\n4k HDR", "https://torrentio.strem.fun/realdebrid/x/n/1/j.mkv",
+     "Interstellar.2014.IMAX.2160p.UHD.BluRay.x265.HDR.DDP5.1-SWTYBLZ.mkv\n\xf0\x9f\x92\xbe 22.3 GB", "Interstellar.2014.IMAX.2160p.UHD.BluRay.x265.HDR.DDP5.1-SWTYBLZ.mkv");
+  best_set_prev("Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv");
+  { const Stream *l[] = { &hin, &en }; check(best_pick(l, 2, 169, &c, 500, &r) == &en, "best fit: English over a Hindi-led dual audio, even played last");
+    setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 2, 169, &c, 500, &r) == &en, "top quality: the same"); unsetenv("SB_BEST_MAX"); }
+  best_set_prev("");
+
   /* an Italian viewer keeps the Italian release */
   best_set_langs("ita", "ita");
   { BestRate a; best_rate(&tb, &c, 500, 45, &a); check(a.subs >= 0, "an Italian viewer: the ITA release is not marked down"); }

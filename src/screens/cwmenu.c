@@ -138,7 +138,7 @@ static void act(int a) {
     case A_RESTART: close(); app_play_from_start(&it); break;
     case A_DETAILS: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_DETAIL, &p, 0); break; }
     case A_WATCHED: { int was = lib_is_marked_watched(&it); sound_play(SND_TOGGLE); if (was) fx_start(4, "eyeOff", T("Marked as unwatched")); else { fx_start(3, "check", T("Marked as watched")); card_mark_pop(it.id); } } close(); if (!strcmp(it.type, "series")) { cJSON *m = sb_meta_cached(it.type, it.id); if (m) on_meta_toggle(m, NULL); else sb_meta(it.type, it.id, on_meta_toggle, NULL); } else on_meta_toggle(NULL, NULL); break;
-    case A_CWOUT: sound_play(SND_TOGGLE); fx_start(5, "cw_remove", T("Removed from Continue Watching")); lib_cw_dismiss(&it); close(); app_refresh_boards(); break; /* (the chip says it, then fades where the card was) */
+    case A_CWOUT: sound_play(SND_TOGGLE); fx_start(5, "cw_remove", T("Removed from Continue Watching")); lib_cw_dismiss(&it); sb_forget_streams(it.id); close(); app_refresh_boards(); break; /* (the chip says it, then fades where the card was) */
     case A_TRAILER: close(); detail_trailer(it.type, it.id, it.name); break;
     case A_SIMILAR: { close(); DetailParams p; memset(&p, 0, sizeof p); p.it = it; app_go(SCR_SIM, &p, 0); break; }
     case A_REVIEWS: close(); revpanel_show(&it, 0, M.from[0], M.from[1], M.from[2], M.from[3], M.from[4]); break;
