@@ -379,6 +379,7 @@ static void cw_facts(const cJSON *it, double nowMs, CwFacts *f) {
   f->timeOffsetMs = js_num(s, "timeOffset", 0); f->durationMs = js_num(s, "duration", 0);
   f->lastWatchedMs = tms(cJSON_GetObjectItemCaseSensitive((cJSON *)s, "lastWatched")); f->nowMs = nowMs;
   const cJSON *h = cJSON_GetObjectItemCaseSensitive(store_node("cwHidden"), js_str(it, "_id", "")); f->dismissedMs = cJSON_IsNumber(h) ? h->valuedouble : 0;
+  f->mtimeMs = tms(cJSON_GetObjectItemCaseSensitive((cJSON *)it, "_mtime"));
 }
 int lib_cw_items(ItemList *out) {
   cJSON *lib = lib_arr(); cJSON *picks[256]; int n = 0; const cJSON *it; double nowMs = (double)time(NULL) * 1000;
@@ -441,8 +442,9 @@ static void on_newep_meta(cJSON *m, void *ud) {
         if (eps[k].season < 0 || eps[k].episode < 0) eps[k].season = 0; /* (no numbers: kept out, as a special) */
         if (!strcmp(js_str(v, "id", ""), cur)) ci = k;
         k++; }
-      double lw = tms(cJSON_GetObjectItemCaseSensitive(js_obj(l, "state"), "lastWatched"));
-      int nx = cw_next_aired(eps, n, ci, lw, (double)time(NULL) * 1000);
+      CwFacts f; cw_facts(l, (double)time(NULL) * 1000, &f); double lw = f.lastWatchedMs > 0 ? f.lastWatchedMs : f.mtimeMs;
+      int nx = cw_next_aired(eps, n, ci, lw, f.nowMs, f.dismissedMs);
+      fprintf(stderr, "[newep] %s: %d episodes, state on %s, next %s\n", id, n, cur[0] ? cur : "-", nx >= 0 ? js_str(cJSON_GetArrayItem(videos, nx), "id", "") : "none");
       if (nx >= 0) { const cJSON *nv = cJSON_GetArrayItem(videos, nx); const char *vid = js_str(nv, "id", ""); if (*vid && lib_set_up_next(id, NULL, vid)) newEpFound = 1; } }
     free(eps); free(flags); }
   free(id); newep_done();
@@ -574,7 +576,24 @@ int lib_is_marked_watched(const Item *it) {
 }
 void lib_toggle_watched(const Item *it, const cJSON *videos) {
   cJSON *l = lib_get(it->id); if (!l) l = lib_new_item(it); int on = !lib_is_marked_watched(it);
-  if (!strcmp(it->type, "series") && strchr(it->videoId, ':')) { const char *ids[1] = { it->videoId }; if (videos) lib_set_eps_watched(l, videos, ids, 1, on); }
+  if (!strcmp(it->type, "series") && strchr(it->videoId, ':')) { const char *ids[1] = { it->videoId }; if (!videos) return;
+    int ts = -1, te = -1; const cJSON *v; cJSON_ArrayForEach(v, videos) if (!strcmp(js_str(v, "id", ""), it->videoId)) { ts = (int)js_numstr(v, "season", -1); te = (int)js_numstr(v, "episode", -1); break; }
+    int nv = cJSON_GetArraySize(videos); const char **all = on && ts > 0 && te >= 0 && nv > 0 && nv <= 1024 ? malloc((size_t)nv * sizeof *all) : NULL;
+    if (all) { /* marked watched: every episode before it too (seasons before it, and this season up to it; specials stay as they are) */
+      int k = 0; cJSON_ArrayForEach(v, videos) { int vs = (int)js_numstr(v, "season", -1), ve = (int)js_numstr(v, "episode", -1); const char *id = js_str(v, "id", "");
+        if (*id && vs > 0 && ve >= 0 && (vs < ts || (vs == ts && ve <= te))) all[k++] = id; }
+      lib_set_eps_watched(l, videos, all, k, 1); free(all);
+      CwEp *eps = calloc((size_t)nv, sizeof *eps); int *fl = calloc((size_t)nv, sizeof *fl); /* the next episode out goes up next in Continue Watching, as after watching it */
+      if (eps && fl) { lib_ep_watched_map(l, videos, fl); int j = 0, ci = -1; cJSON_ArrayForEach(v, videos) {
+          eps[j].season = (int)js_numstr(v, "season", -1); eps[j].episode = (int)js_numstr(v, "episode", -1); eps[j].watched = fl[j]; if (eps[j].season < 0 || eps[j].episode < 0) eps[j].season = 0;
+          const char *rel = js_str(v, "released", js_str(v, "firstAired", NULL)); if (rel && *rel) { cJSON tmp; memset(&tmp, 0, sizeof tmp); tmp.type = cJSON_String; tmp.valuestring = (char *)rel; eps[j].releasedMs = tms(&tmp); }
+          if (!strcmp(js_str(v, "id", ""), it->videoId)) ci = j; j++; }
+        int nx = cw_next_aired(eps, nv, ci, 0, (double)time(NULL) * 1000, 0);
+        const cJSON *st = js_obj(l, "state"); int busy = 0; /* part way through an episode still not watched: left as it is */
+        for (int q = 0; q < nv && !busy; q++) if (!strcmp(js_str(cJSON_GetArrayItem(videos, q), "id", ""), js_str(st, "video_id", "")) && !fl[q] && js_num(st, "timeOffset", 0) > 0) busy = 1;
+        if (nx >= 0 && !busy) lib_set_up_next(it->id, it, js_str(cJSON_GetArrayItem(videos, nx), "id", "")); }
+      free(eps); free(fl); }
+    else lib_set_eps_watched(l, videos, ids, 1, on); }
   else lib_set_movie_watched(l, on);
 }
 
