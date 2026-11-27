@@ -66,6 +66,13 @@ int main(void) {
     setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 2, 169, &c, 500, &r) == &en, "top quality: the same"); unsetenv("SB_BEST_MAX"); }
   best_set_prev("");
 
+  /* English always first: a Hindi-only Dolby Vision 4K and a Hindi-led one lose to an English HDR10 4K, in both modes */
+  Stream hinOnly; mk(&hinOnly, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/o/1/k.mkv",
+     "Interstellar.2014.2160p.WEB-DL.Hindi.DDP5.1.Atmos.DV.HDR.x265-HDH.mkv\n\xf0\x9f\x92\xbe 20.1 GB\n\xf0\x9f\x87\xae\xf0\x9f\x87\xb3", "Interstellar.2014.2160p.WEB-DL.Hindi.DDP5.1.Atmos.DV.HDR.x265-HDH.mkv");
+  { const Stream *l[] = { &hinOnly, &hin, &en }; check(best_pick(l, 3, 169, &c, 500, &r) == &en, "best fit: English HDR10 over Hindi DV");
+    setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 3, 169, &c, 500, &r) == &en, "top quality: English HDR10 over Hindi DV"); unsetenv("SB_BEST_MAX"); }
+  { const Stream *l[] = { &hinOnly, &hin }; check(best_pick(l, 2, 169, &c, 500, &r) == &hin, "no English-led release: the one that has English inside"); }
+
   /* an Italian viewer keeps the Italian release */
   best_set_langs("ita", "ita");
   { BestRate a; best_rate(&tb, &c, 500, 45, &a); check(a.subs >= 0, "an Italian viewer: the ITA release is not marked down"); }

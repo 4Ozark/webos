@@ -266,6 +266,8 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 1.5 : 4) : line; /* a swarm gives roughly 1.5 Mbps a seed */
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
   if (!o) return 1;
+  { unsigned lm = langs_named(t, l); int fl = lead_lang(s), ia = lang_ia(), multi = has_word(l, "multi") || has_word(l, "dual");
+    o->lr = (fl >= 0 && fl != ia) ? ((lm & (1u << ia)) || multi ? 1 : 0) : (!lm || (lm & (1u << ia))) ? 2 : multi ? 1 : 0; }
   o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->res = rr; o->cont = cont; o->subs = subs; if (resOut) *resOut = r;
   /* top quality, in this order (each only between streams equal in the ones before):
      1. picture and source: 4K Remux, 4K BluRay, 4K WEB-DL, 4K WEBRip, (4K, source not named), then the same at 1080p, HDTV, lower
@@ -342,6 +344,8 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
 #endif
   BestRate *rs = n > 0 ? malloc(n * sizeof *rs) : NULL; int *tk = n > 0 ? malloc(n * sizeof *tk) : NULL, m = 0;
   for (int i = 0; i < n; i++) { int res = 0; if (!list[i] || !list[i]->url[0] || !rate(list[i], c, mbps, durMin, &rs[m], &res)) continue; tk[m++] = res == mx ? 0 : 1 + (mx - res); }
+  { int top = -1; for (int i = 0; i < m; i++) if (rs[i].lr > top) top = rs[i].lr; /* the language first: only the streams in the best one there is (English, or the original) */
+    int k = 0; for (int i = 0; i < m; i++) if (rs[i].lr == top) { rs[k] = rs[i]; tk[k] = tk[i]; k++; } m = k; }
   const BestRate *best = NULL;
   /* tiers in order; inside one, the first best score (the web's stable sort) */
   for (int done = 0, cur = -1; !best && !done; ) {
