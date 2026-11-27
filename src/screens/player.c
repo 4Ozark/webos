@@ -1776,12 +1776,12 @@ int  player_waiting(void) { return P.open && !P.closing && !P.started && !P.fail
 /* after a failure: the best of the other streams, behind the same art (the failed one is left out) */
 static void try_next(void) {
   fprintf(stderr, "[player] trying the next stream\n"); prepare(P.vid, 0, 0);
-  set_status(T("Choosing the best stream")); bestSess++;
+  set_status(T("Choosing the best stream")); bestSess++; best_set_title(P.id); /* keep to the release played last for this title */
   bestTok = best_choose(P.type, P.vid, best_dur(P.meta, P.type), on_best_status, on_best_done, (void *)(uintptr_t)bestSess);
 }
 void player_choose_best(const char *type, const char *id, const char *vid) {
   open_title(type, id); prepare(vid, 0, 0);
-  set_status(T("Choosing the best stream")); bestSess++;
+  set_status(T("Choosing the best stream")); bestSess++; best_set_title(P.id); /* keep to the release played last for this title */
   bestTok = best_choose(type, P.vid, best_dur(P.meta, type), on_best_status, on_best_done, (void *)(uintptr_t)bestSess);
 }
 void player_play(const Stream *s, const char *type, const char *id, const char *vid, int fromStart) { open_title(type, id); play_stream(s, vid, fromStart ? -1 : 0); }

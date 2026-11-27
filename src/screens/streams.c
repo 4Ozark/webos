@@ -5,6 +5,7 @@
 #include "screens/sheet.h"
 #include "core/app.h"
 #include "core/best.h"
+#include "core/store.h"
 #include "core/keys.h"
 #include "core/i18n.h"
 #include "ui/gfx.h"
@@ -65,6 +66,7 @@ static void rebuild(void) {
       nw[n] = was_seen(s) ? 0 : now; n++; } } /* rows new to the list fade in (never pop) */
   /* best stream on: the pick for this TV right after the resume row */
   if (best_play_on() && S.filter < 0 && n) { const Stream *list[MAXITEMS]; int m = 0; for (int i = 0; i < n; i++) if (S.kind[i] == R_PLAIN) list[m++] = S.items[i];
+    best_set_langs(store_get("defaultAudioTrack", ""), store_get("subsLang", "")); best_set_title(S.id); /* the user's languages and the release played last for this title */
     BestRate r; const Stream *b = m ? best_pick(list, m, best_dur(sb_meta_cached(S.type, S.id), S.type), NULL, -1, &r) : NULL;
     if (b) { int at = S.kind[0] == R_RESUME ? 1 : 0; memmove(S.items + at + 1, S.items + at, (n - at) * sizeof *S.items); memmove(S.itemGroup + at + 1, S.itemGroup + at, (n - at) * sizeof *S.itemGroup);
       memmove(S.kind + at + 1, S.kind + at, (n - at) * sizeof *S.kind); memmove(nw + at + 1, nw + at, (n - at) * sizeof *nw);
