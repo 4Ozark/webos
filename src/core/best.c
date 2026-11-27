@@ -214,12 +214,21 @@ static int first_lang(const char *file) {
 /* how likely a release carries subtitles that fit: many languages (a multi-language mux ships their subtitles too),
    MULTI, subs named: +1; a local release whose own language leads, not the user's nor English: -1 (its subtitles are
    in that language, and others' are timed to the international release) */
+/* the language a release leads with: the first one its file name names, else its title's first line; a title in
+   Cyrillic (a Russian tracker's) leads with its Russian dub. -1 when nothing tells */
+static int lead_lang(const Stream *s) {
+  char f[512]; file_of(s, f, sizeof f); int fl = f[0] ? first_lang(f) : -1; if (fl >= 0) return fl;
+  char t[512]; snprintf(t, sizeof t, "%s", s->title); char *e = strchr(t, '\n'); if (e) *e = 0;
+  fl = first_lang(t); if (fl >= 0) return fl;
+  for (const unsigned char *p = (const unsigned char *)t; *p; p++) if ((*p == 0xd0 || *p == 0xd1) && p[1] >= 0x80 && p[1] <= 0xbf) return lang_index("rus");
+  return -1; }
+static int lang_ia(void) { int ia = lang_index(prefAudio); return ia >= 0 ? ia : lang_index("eng"); }
+static int lang_ours(int li) { return li == lang_ia() || li == lang_index("eng") || li == lang_index(prefSubs); } /* the user's audio or subtitle language, or English */
 static int subs_likely(const Stream *s, const char *raw, const char *l) {
   unsigned m = langs_named(raw, l); int nl = 0; for (unsigned x = m; x; x &= x - 1) nl++;
   int sc = (nl >= 3 || has_word(l, "multi") || has_word(l, "msubs") || has_word(l, "multisub") || has_word(l, "multisubs") || strstr(l, "webmux")
     || has_word(l, "subs") || has_word(l, "subbed") || has_word(l, "esub") || has_word(l, "esubs")) ? 1 : 0;
-  char f[512]; file_of(s, f, sizeof f); if (!f[0]) { snprintf(f, sizeof f, "%s", s->title); char *nl2 = strchr(f, '\n'); if (nl2) *nl2 = 0; }
-  int fl = first_lang(f), ia = lang_index(prefAudio), is = lang_index(prefSubs), ie = lang_index("eng");
+  int fl = lead_lang(s), ia = lang_index(prefAudio), is = lang_index(prefSubs), ie = lang_index("eng");
   if (fl >= 0 && fl != ie && fl != ia && fl != is) sc -= 1;
   return sc; }
 static int maxMode; /* bestMax, read once per pick */
@@ -247,7 +256,9 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   if (strstr(au, "Atmos")) sc += 6;
   if (has_word(l, "av1") && !c->av1) sc -= 200; /* nothing to fall back to: the picture won't decode */
   sc += lang_score(t, l); /* the user's languages (settings) */
-  int cont = 0; if (prevRel[0]) { char f[512]; file_of(s, f, sizeof f); int fit = best_sub_fit(f[0] ? f : s->title, prevRel); cont = fit >= 60 ? 2 : fit >= 40 ? 1 : 0; } /* the release played last for this title */
+  { int fl = lead_lang(s);
+    if (fl >= 0 && !lang_ours(fl) && (langs_named(t, l) & ((1u << lang_ia()) | (1u << lang_index("eng"))))) sc -= 60; } /* a dub that leads ("Hindi-English", "ITA-ENG"): its first track is the dub, so naming English earns nothing */
+  int cont = 0; if (prevRel[0] && (first_lang(prevRel) < 0 || lang_ours(first_lang(prevRel)))) { /* (a release that led with a dub is not one to keep to) */ char f[512]; file_of(s, f, sizeof f); int fit = best_sub_fit(f[0] ? f : s->title, prevRel); cont = fit >= 60 ? 2 : fit >= 40 ? 1 : 0; } /* the release played last for this title */
   int subs = subs_likely(s, t, l);
   sc += (cont == 2 ? 120 : cont == 1 ? 30 : 0) + subs * 25; /* (the resolution is chosen before the score: this never trades the picture away) */
   double mb = size_mb(t), need = mb ? mb * 8 / (dur * 60) : by_res(rr, 22, 12, 8, 4, 2);
@@ -255,7 +266,9 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   double line = mbps ? mbps : (p2p ? 40 : 100), cap = p2p ? fmin(line, sd > 0 ? 2 + sd * 1.5 : 4) : line; /* a swarm gives roughly 1.5 Mbps a seed */
   sc += p2p ? (sd < 0 ? -80 : fmin(45, 7 * log(sd + 1) / M_LN2) - 35) : 40; /* seeds unknown: its health can't be told */
   if (!o) return 1;
-  o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->res = rr; o->cont = cont; o->subs = subs; if (resOut) *resOut = r;
+  { unsigned lm = langs_named(t, l); int fl = lead_lang(s), ia = lang_ia(), multi = has_word(l, "multi") || has_word(l, "dual");
+    o->lr = (fl >= 0 && fl != ia) ? ((lm & (1u << ia)) || multi ? 1 : 0) : (!lm || (lm & (1u << ia))) ? 2 : multi ? 1 : 0; }
+  o->s = s; o->sc = sc; o->need = need; o->cap = cap; o->mute = mute; o->mb = mb; o->res = rr; o->cont = cont; o->subs = subs; if (resOut) *resOut = r;
   /* top quality, in this order (each only between streams equal in the ones before):
      1. picture and source: 4K Remux, 4K BluRay, 4K WEB-DL, 4K WEBRip, (4K, source not named), then the same at 1080p, HDTV, lower
      2. HDR: Dolby Vision (on a TV with it; without, a file that has HDR10 under it counts as HDR10), HDR10+, HDR10, HLG, none
@@ -279,7 +292,7 @@ static int rate(const Stream *s, const TvCaps *c, double mbps, double dur, BestR
   size_t k = 0; o->sum[0] = 0; for (int i = 0; i < np; i++) k += snprintf(o->sum + k, k < sizeof o->sum ? sizeof o->sum - k : 0, "%s%s", i ? "  \xc2\xb7  " : "", parts[i]);
   return 1;
 }
-static const TvCaps FALLBACK = { 1080, 0, 0, 0, 0, 0 };
+static const TvCaps FALLBACK = { 1080, 0, 0, 0, 0, 1 };
 /* Real-Debrid's links end with the file's name and lead straight to it, so the file's hash and name are found and the
    subtitle made for it is chosen. TorBox's (through Torrentio and the like) end with an id and resolve the file on each
    request: the hash and the file's own tracks often time out. Between two debrid copies of one file, Real-Debrid's */
@@ -308,14 +321,16 @@ int best_rate(const Stream *s, const TvCaps *c, double mbps, double durMin, Best
    carries without buffering: a file's average bitrate (its size over the running time) plus 30% headroom must
    fit the speed measured when the setting was switched on. The first resolution with such a stream wins (its
    best one); when nothing fits anywhere, the lightest stream at the TV's resolution. */
-/* top quality's order: sound that plays here, the picture (resolution, then HDR), then the release played last for
-   this title and a release that likely has subtitles (a sharper source or sound is worth less than a subtitle that
-   fits), then source and sound (key), then the surest (debrid, seeds) */
+/* top quality's order: sound that plays here; the picture (resolution, then DV > HDR10+ > HDR10 > HLG > SDR); the
+   release played last for this title (its subtitle fits); not a release whose subtitles won't fit (a dub-led one);
+   then the biggest file (the most bitrate: a remux over an encode); then likely subtitles, source and sound, the surest */
 static int max_better(const BestRate *a, const BestRate *b) {
   if (a->mute != b->mute) return a->mute < b->mute;
   if (a->res != b->res) return a->res > b->res;
   if (a->hr != b->hr) return a->hr > b->hr;
   if (a->cont != b->cont) return a->cont > b->cont;
+  if ((a->subs >= 0) != (b->subs >= 0)) return a->subs >= 0;
+  if (a->mb != b->mb) return a->mb > b->mb;
   if (a->subs != b->subs) return a->subs > b->subs;
   if (a->key != b->key) return a->key > b->key;
   return a->sc > b->sc; }
@@ -331,6 +346,8 @@ const Stream *best_pick(const Stream *const *list, int n, double durMin, const T
 #endif
   BestRate *rs = n > 0 ? malloc(n * sizeof *rs) : NULL; int *tk = n > 0 ? malloc(n * sizeof *tk) : NULL, m = 0;
   for (int i = 0; i < n; i++) { int res = 0; if (!list[i] || !list[i]->url[0] || !rate(list[i], c, mbps, durMin, &rs[m], &res)) continue; tk[m++] = res == mx ? 0 : 1 + (mx - res); }
+  { int top = -1; for (int i = 0; i < m; i++) if (rs[i].lr > top) top = rs[i].lr; /* the language first: only the streams in the best one there is (English, or the original) */
+    int k = 0; for (int i = 0; i < m; i++) if (rs[i].lr == top) { rs[k] = rs[i]; tk[k] = tk[i]; k++; } m = k; }
   const BestRate *best = NULL;
   /* tiers in order; inside one, the first best score (the web's stable sort) */
   for (int done = 0, cur = -1; !best && !done; ) {
@@ -400,12 +417,12 @@ typedef struct { void (*cb)(const TvCaps *, void *); void *ud; } CapsWait;
 static CapsWait capsWaits[8]; static int nCapsWaits;
 const TvCaps *best_caps(void) {
   if (capsKnown < 0) { const cJSON *n = store_node("tvCaps2"); capsKnown = 0;
-    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = js_bool(n, "truehd", 0); capsKnown = 1;
+    if (cJSON_IsObject(n) && cJSON_GetObjectItemCaseSensitive(n, "maxRes")) { caps.maxRes = (int)js_num(n, "maxRes", 1080); caps.hdr = js_bool(n, "hdr", 0); caps.dv = js_bool(n, "dv", 0); caps.av1 = js_bool(n, "av1", 0); caps.truehd = 1; capsKnown = 1; /* TrueHD: this TV plays it (fixed, as asked: an LG that decodes it on its own speakers) */
       caps.dts = best_learned("dts") == 1 || (best_learned("dts") < 0 && js_bool(n, "dtsCfg", 0)); } } /* the old "dts" (a guess from the webOS release) no longer counts */ /* the old "dts" (a guess from the webOS release) no longer counts */
   return capsKnown > 0 ? &caps : NULL;
 }
 /* the learned flags sit beside the asked ones in tvCaps2 ("dtsLearned", "hlsHevcOk", "dv81Hls"): kept when the caps are asked again */
-static const char *learned_key(const char *what) { return !strcmp(what, "dts") ? "dtsLearned" : what; }
+static const char *learned_key(const char *what) { return !strcmp(what, "dts") ? "dtsLearned" : !strcmp(what, "truehd") ? "truehdLearned" : what; }
 /* Settings > Audio > DTS sound: "auto" (playback finds out), "convert" (always converted), "off" (the TV plays it) */
 int best_dts_mode(void) { const char *m = store_get("dtsMode", "auto"); return !strcmp(m, "convert") ? 1 : !strcmp(m, "off") ? 2 : 0; }
 int best_learned(const char *what) {
@@ -417,6 +434,7 @@ void best_learn(const char *what, int yes) {
   const cJSON *o = store_node("tvCaps2"); cJSON *n = cJSON_IsObject(o) ? cJSON_Duplicate(o, 1) : cJSON_CreateObject(); if (!n) return;
   cJSON_DeleteItemFromObjectCaseSensitive(n, learned_key(what)); cJSON_AddBoolToObject(n, learned_key(what), yes != 0); store_set_node("tvCaps2", n);
   if (!strcmp(what, "dts") && capsKnown > 0) caps.dts = yes != 0;
+  if (!strcmp(what, "truehd") && capsKnown > 0) caps.truehd = yes != 0;
   fprintf(stderr, "[best] learned: %s %s\n", what, yes ? "yes" : "no");
 }
 /* a luna answer read the web's way: anything set and not false counts */
@@ -443,7 +461,7 @@ static void *caps_worker(void *arg) {
      A wrong "no" only costs a little score; a wrong "yes" would pick a stream that plays without sound or
      picture, so every doubt is a no. */
   int v = webos_major(), dtsCfg = -1;
-  c.dts = 0; c.av1 = v >= 6 || (v == 5 && c.maxRes == 2160); c.truehd = 0;
+  c.dts = 0; c.av1 = v >= 6 || (v == 5 && c.maxRes == 2160); c.truehd = 1; /* fixed: this TV plays TrueHD */
   r = plat_luna_call("luna://com.webos.service.config/getConfigs", "{\"configNames\":[\"tv.model.*\"]}", 3000);
   j = r ? cJSON_Parse(r) : NULL; free(r); k = cJSON_GetObjectItemCaseSensitive(j, "configs");
   if (cJSON_IsObject(k)) { const cJSON *e; cJSON_ArrayForEach(e, k) { if (!e->string || !cJSON_IsBool(e)) continue; /* tv.model.supportDTS and the like, on firmware that has one */
@@ -468,11 +486,12 @@ void best_caps_probe(void (*cb)(const TvCaps *c, void *ud), void *ud) {
 static void caps_landed(const TvCaps *c, int sure, int dtsCfg) {
   caps = *c; capsKnown = 1; capsAsking = 0;
   if (best_learned("dts") >= 0) caps.dts = best_learned("dts"); /* learned while the worker asked */
+  caps.truehd = 1;
   if (sure) { /* kept only when the TV answered: a guess serves this run only */
   cJSON *n = cJSON_CreateObject(); cJSON_AddNumberToObject(n, "maxRes", c->maxRes); cJSON_AddBoolToObject(n, "hdr", c->hdr); cJSON_AddBoolToObject(n, "dv", c->dv);
   cJSON_AddBoolToObject(n, "av1", c->av1); cJSON_AddBoolToObject(n, "truehd", c->truehd); if (dtsCfg >= 0) cJSON_AddBoolToObject(n, "dtsCfg", dtsCfg);
-  static const char *const KEEP[] = { "dtsLearned", "hlsHevcOk", "dv81Hls" }; /* what playback taught stays */
-  for (int i = 0; i < 3; i++) { int v = best_learned(KEEP[i]); if (v >= 0) cJSON_AddBoolToObject(n, KEEP[i], v); }
+  static const char *const KEEP[] = { "dtsLearned", "hlsHevcOk", "dv81Hls", "truehdLearned" }; /* what playback taught stays */
+  for (int i = 0; i < 4; i++) { int v = best_learned(KEEP[i]); if (v >= 0) cJSON_AddBoolToObject(n, KEEP[i], v); }
   store_set_node("tvCaps2", n); }
   int nw = nCapsWaits; CapsWait w[8]; memcpy(w, capsWaits, sizeof w); nCapsWaits = 0;
   for (int i = 0; i < nw; i++) w[i].cb(&caps, w[i].ud);

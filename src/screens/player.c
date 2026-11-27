@@ -135,7 +135,7 @@ static struct {
   /* the sources tray's lists: one per addon serving the video (in the user's order), each asked when first seen */
   struct { char vid[80]; struct { char name[96]; Stream *items; float *h; int n, st, open; unsigned tok; Mo fa, bh, ia; float bhT; int leaving, seen, touched; } g[16]; int ng, on; } srcs; /* fa: how open its list is (alpha, slide), bh: its list's height as laid out now, ia: its rows fading in as they come */
   /* subs */ SubEntry *ext; int next_; int nExt, extLoading; char curSub[1100]; struct { int list; char addon[64], lang[24]; } pick; Cue *cues; int ncues; double subDelay; VidTrack emb[16]; int nEmb; int autoSubDone; unsigned subReq; unsigned trSubTok; int locDone; struct { int has; char sub[1200], aud[28], file[256]; double delay; int haveDly; } pv; int pvU; /* pv: what the viewer chose here last time; pvU: what they changed this time (1 subtitle, 2 audio, 4 delay) */
-  int curAud; int autoAudDone; int didResume;
+  int curAud; int autoAudDone; double audRetryAt; int didResume; /* audRetryAt: auto_audio asks again until the TV lists the tracks */
   /* sound this TV can't decode (DTS, TrueHD): when the DTS track started playing, the codecs refused on this stream (error
      200), what was said */ struct { double playAt; char bad[4][16]; int nbad, said, gaveUp, switches;
     /* the sound converted on this device (hproxy): 0 no, 1 opening, 2 playing it; the file's audio track converted, the
@@ -409,6 +409,7 @@ static void pv_for_file(void) {
   if (same) return;
   if (!strncmp(P.pv.sub, "ext|", 4)) { fprintf(stderr, "[pv] the kept subtitle was for another file (%s): chosen again for this one\n", P.pv.file[0] ? P.pv.file : "not recorded"); P.pv.sub[0] = 0; }
   if (P.pv.haveDly) { fprintf(stderr, "[pv] the kept delay was for another file: not applied\n"); P.pv.haveDly = 0; P.pv.delay = 0; P.subDelay = 0; }
+  if (P.pv.aud[0] == '#') { fprintf(stderr, "[pv] the kept audio track (by its place) was for another file: the default language instead\n"); P.pv.aud[0] = 0; } /* track 2 of another release is another language */
   P.pv.has = P.pv.sub[0] || P.pv.aud[0];
 }
 static void pv_flush(void) {
@@ -659,12 +660,12 @@ static void sync_tick(void) {
 
 /* ---- audio ---- */
 static void set_audio(int i) { P.curAud = i; video_select_audio(i); P.infoKey[0] = 0; }
-/* ---- sound this TV can't decode: DTS where it was seen failing (or not yet seen playing), TrueHD always (passed
-   through to a receiver only), and any codec the TV refused on this stream (error 200: the picture plays on) ---- */
+/* ---- sound this TV can't decode: DTS where it was seen failing (or not yet seen playing), TrueHD where it was seen
+   failing; TrueHD never (this TV decodes it: fixed), and any codec the TV refused on this stream (error 200: the picture plays on) ---- */
 static int aud_kind(const char *codec) { /* 1 DTS, 2 TrueHD, 0 another; the TV's names ("dts") and Matroska's ("A_DTS") alike */
   char c[32]; lower(codec, c, sizeof c); return strstr(c, "dts") ? 1 : (strstr(c, "truehd") || strstr(c, "mlp")) ? 2 : 0; }
 static int aud_bad(const VidTrack *t) {
-  int k = aud_kind(t->codec), dm = best_dts_mode(); if (k == 2 || (k == 1 && (dm == 1 || (dm == 0 && best_learned("dts") == 0) || getenv("SB_DTS_CONVERT")))) return 1; /* DTS: Convert always; Auto once the TV was seen failing it; Off left to the TV */ /* (SB_DTS_CONVERT: development, a TV that plays DTS converts it anyway) */
+  int k = aud_kind(t->codec), dm = best_dts_mode(); if ((k == 1 && (dm == 1 || (dm == 0 && best_learned("dts") == 0) || getenv("SB_DTS_CONVERT")))) return 1; /* DTS: Convert always; Auto once the TV was seen failing it; Off left to the TV */ /* (SB_DTS_CONVERT: development, a TV that plays DTS converts it anyway) */
   for (int i = 0; i < P.dts.nbad; i++) if (t->codec[0] && !strcasecmp(P.dts.bad[i], t->codec)) return 1;
   return 0;
 }
@@ -679,19 +680,30 @@ static void aud_label(const VidTrack *t, char *out, size_t cap) { /* "AC3 5.1" *
   char c[16]; size_t i = 0; const char *s = t->codec; if (!strncmp(s, "A_", 2)) s += 2; for (; s[i] && i + 1 < sizeof c; i++) c[i] = (char)toupper((unsigned char)s[i]); c[i] = 0;
   int ch = t->channels; snprintf(out, cap, "%s%s", c, ch == 6 ? " 5.1" : ch == 8 ? " 7.1" : ch == 2 ? " 2.0" : ch == 1 ? " 1.0" : "");
 }
+/* a track in this language: its language code, else its name ("English", "English - DD+ 5.1") when the file left the code out */
+static int aud_is(const VidTrack *t, const char *want) {
+  if (lang_match(t->lang, want)) return 1;
+  char w[24]; size_t k = 0; for (const char *p = t->name; *p && k + 1 < sizeof w; p++) { char c = *p; if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) w[k++] = c; else if (k) break; } w[k] = 0;
+  return k >= 2 && lang_match(w, want); }
+/* The audio track: what the viewer chose here last time, else the default audio language (Settings > Audio), else
+   English when the file has it. Asked again every half second until the TV lists the tracks (up to 20 s): asked
+   once, too early, it chose nothing and the file's own first track played (an ITA-ENG release in Italian) */
 static void auto_audio(void) {
   if (P.autoAudDone) return;
-  if (P.pv.aud[0]) { VidTrack ts[16]; int n = aud_list(ts, 16); if (n) { int pick = -1;
-      if (P.pv.aud[0] == '#') { int k = atoi(P.pv.aud + 1); if (k >= 0 && k < n) pick = k; }
-      else { char lang[24]; int ord = 0; const char *q = strchr(P.pv.aud, '|'); size_t ll = q ? (size_t)(q - P.pv.aud) : strlen(P.pv.aud); if (ll < sizeof lang) { memcpy(lang, P.pv.aud, ll); lang[ll] = 0; if (q) ord = atoi(q + 1);
-          int seen = 0; for (int i = 0; i < n; i++) if (!strcmp(ts[i].lang, lang) && seen++ == ord) { pick = i; break; }
-          if (pick < 0) for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, lang)) { pick = i; break; } } }
-      P.autoAudDone = 1; if (pick >= 0 && ts[pick].idx != P.curAud) { fprintf(stderr, "[pv] audio: %s\n", P.pv.aud); set_audio(ts[pick].idx); } return; } }
+  if (P.pvU & 2) { P.autoAudDone = 1; return; } /* the viewer picked one already */
+  VidTrack ts[16]; int n = aud_list(ts, 16); if (!n) return; /* not listed yet */
+  P.autoAudDone = 1; int pick = -1;
+  if (P.pv.aud[0]) {
+    if (P.pv.aud[0] == '#') { int k = atoi(P.pv.aud + 1); if (k >= 0 && k < n) pick = k; }
+    else { char lang[24]; int ord = 0; const char *q = strchr(P.pv.aud, '|'); size_t ll = q ? (size_t)(q - P.pv.aud) : strlen(P.pv.aud); if (ll < sizeof lang) { memcpy(lang, P.pv.aud, ll); lang[ll] = 0; if (q) ord = atoi(q + 1);
+        int seen = 0; for (int i = 0; i < n; i++) if (!strcmp(ts[i].lang, lang) && seen++ == ord) { pick = i; break; }
+        if (pick < 0) for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, lang)) { pick = i; break; } } }
+    if (pick >= 0) { if (ts[pick].idx != P.curAud) { fprintf(stderr, "[pv] audio: %s\n", P.pv.aud); set_audio(ts[pick].idx); } return; } } /* (not in this file: the default language below) */
   if (strcmp(store_get("enableDefaultAudioTrack", "false"), "true")) return; const char *want = store_get("defaultAudioTrack", ""); if (!*want) return;
-  VidTrack ts[16]; int n = aud_list(ts, 16); if (!n) return; int pick = -1;
-  for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, want) && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* in that language, one whose sound plays here first */
-  if (pick < 0 && strcmp(want, "eng")) for (int i = 0; i < n; i++) if (lang_match(ts[i].lang, "eng") && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* not in the file: English, when the file has it */
-  if (pick >= 0) { P.autoAudDone = 1; set_audio(ts[pick].idx); }
+  for (int i = 0; i < n; i++) if (aud_is(&ts[i], want) && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* in that language, one whose sound plays here first */
+  if (pick < 0 && strcmp(want, "eng")) for (int i = 0; i < n; i++) if (aud_is(&ts[i], "eng") && (pick < 0 || (aud_bad(&ts[pick]) && !aud_bad(&ts[i])))) pick = i; /* not in the file: English, when the file has it */
+  fprintf(stderr, "[audio] %d tracks, want %s: %s\n", n, want, pick >= 0 ? ts[pick].lang[0] ? ts[pick].lang : ts[pick].name : "none in that language, the file's own");
+  if (pick >= 0 && ts[pick].idx != P.curAud) set_audio(ts[pick].idx);
 }
 /* No track this TV plays: the file is converted on the TV itself (video copied, the sound as Dolby Digital 5.1) and
    played from a local HLS stream through the same pipeline, from the same moment; the subtitles still read the file.
@@ -2030,10 +2042,11 @@ void player_tick(float dt) {
   /* the art stays until the picture really runs: the resume jump is made behind it, and it fades only once playing has
      been steady for a moment (never a frozen first frame, then a spinner) */
   if (!P.live && video_live()) {
-    if (!P.liveT0) { P.liveT0 = now_(); P.steadyAt = 0; apply_aspect(); try_resume(); auto_audio(); load_emb_tracks(); }
+    if (!P.liveT0) { P.liveT0 = now_(); P.steadyAt = 0; apply_aspect(); try_resume(); auto_audio(); P.audRetryAt = now_() + 0.5; load_emb_tracks(); }
     int steady = (video_state() == VID_PLAYING || paused()) && !video_settling(); if (!steady) P.steadyAt = 0; else if (!P.steadyAt) P.steadyAt = now_();
     if ((P.steadyAt && now_() - P.steadyAt > 0.35) || now_() - P.liveT0 > 15) { P.live = 1; pg_ask(); fprintf(stderr, "[player] picture running after %.1f s\n", now_() - P.liveT0); if (resumeMsg[0]) { toast(resumeMsg, 2500, NULL); resumeMsg[0] = 0; } } }
   if (!video_live()) P.liveT0 = 0;
+  if (P.liveT0 && !P.autoAudDone && now_() >= P.audRetryAt && now_() - P.liveT0 < 20) { P.audRetryAt = now_() + 0.5; auto_audio(); } /* the TV had not listed the tracks yet: asked again */
   if (P.live && !P.skipsAsked && dur() > 0) load_skips(); /* once the length is known: segments are checked against it */
   if (P.live) {
     if (video_width() != P.lastVw || video_height() != P.lastVh) apply_aspect(); /* the picture's size became known or changed */

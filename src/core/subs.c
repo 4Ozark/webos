@@ -151,7 +151,10 @@ int subs_parse_body(const unsigned char *body, size_t len, Cue **out) {
 static const char *ALIAS[][2] = { { "en", "eng" }, { "ar", "ara" }, { "fr", "fre" }, { "fra", "fre" }, { "es", "spa" }, { "spl", "spa" }, { "de", "ger" }, { "deu", "ger" }, { "it", "ita" }, { "pt", "por" }, { "pob", "por" },
   { "ru", "rus" }, { "tr", "tur" }, { "pl", "pol" }, { "nl", "dut" }, { "nld", "dut" }, { "sv", "swe" }, { "he", "heb" }, { "iw", "heb" }, { "hi", "hin" }, { "ja", "jpn" }, { "ko", "kor" }, { "zh", "chi" }, { "zho", "chi" },
   { "ro", "rum" }, { "ron", "rum" }, { "el", "gre" }, { "ell", "gre" }, { "cs", "cze" }, { "ces", "cze" }, { "fa", "per" }, { "fas", "per" }, { "da", "dan" }, { "fi", "fin" }, { "no", "nor" }, { "nb", "nor" }, { "nob", "nor" },
-  { "hu", "hun" }, { "bg", "bul" }, { "uk", "ukr" }, { "sr", "srp" }, { "hr", "hrv" }, { "sk", "slo" }, { "slk", "slo" }, { "sl", "slv" }, { "id", "ind" }, { "ms", "may" }, { "msa", "may" }, { "th", "tha" }, { "vi", "vie" }, { NULL, NULL } };
+  { "hu", "hun" }, { "bg", "bul" }, { "uk", "ukr" }, { "sr", "srp" }, { "hr", "hrv" }, { "sk", "slo" }, { "slk", "slo" }, { "sl", "slv" }, { "id", "ind" }, { "ms", "may" }, { "msa", "may" }, { "th", "tha" }, { "vi", "vie" },
+  /* names, as some files label their tracks instead of a code */
+  { "english", "eng" }, { "arabic", "ara" }, { "french", "fre" }, { "spanish", "spa" }, { "german", "ger" }, { "italian", "ita" }, { "portuguese", "por" }, { "russian", "rus" },
+  { "turkish", "tur" }, { "polish", "pol" }, { "dutch", "dut" }, { "swedish", "swe" }, { "hebrew", "heb" }, { "hindi", "hin" }, { "japanese", "jpn" }, { "korean", "kor" }, { "chinese", "chi" }, { NULL, NULL } };
 /* a track's language as a name (the player's chips and lists) */
 static const char *LANGS[][2] = { { "en", "English" }, { "eng", "English" }, { "fr", "French" }, { "fre", "French" }, { "fra", "French" }, { "es", "Spanish" }, { "spa", "Spanish" }, { "de", "German" }, { "ger", "German" }, { "deu", "German" },
   { "it", "Italian" }, { "ita", "Italian" }, { "pt", "Portuguese" }, { "por", "Portuguese" }, { "ru", "Russian" }, { "rus", "Russian" }, { "ar", "Arabic" }, { "ara", "Arabic" }, { "tr", "Turkish" }, { "tur", "Turkish" },

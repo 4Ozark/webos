@@ -55,6 +55,46 @@ int main(void) {
   best_set_prev("");
   { const Stream *l[] = { &flux1080, &rd }; setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 2, 45, &c, 5, &r) == &rd, "top quality: 4K on a 5 Mbps line"); unsetenv("SB_BEST_MAX"); }
 
+  /* Interstellar: a Hindi-led dual audio release, played last, against an English one */
+  Stream hin, en; best_set_langs("eng", "ara");
+  mk(&hin, "[RD+] Torrentio\n4k HDR", "https://torrentio.strem.fun/realdebrid/x/m/1/i.mkv",
+     "Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv\n\xf0\x9f\x92\xbe 24.1 GB\n\xf0\x9f\x87\xae\xf0\x9f\x87\xb3 / \xf0\x9f\x87\xac\xf0\x9f\x87\xa7", "Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv");
+  mk(&en, "[RD+] Torrentio\n4k HDR", "https://torrentio.strem.fun/realdebrid/x/n/1/j.mkv",
+     "Interstellar.2014.IMAX.2160p.UHD.BluRay.x265.HDR.DDP5.1-SWTYBLZ.mkv\n\xf0\x9f\x92\xbe 22.3 GB", "Interstellar.2014.IMAX.2160p.UHD.BluRay.x265.HDR.DDP5.1-SWTYBLZ.mkv");
+  best_set_prev("Interstellar.2014.IMAX.2160p.UHD.BluRay.Hindi.English.DDP5.1.HDR.x265-Telly.mkv");
+  { const Stream *l[] = { &hin, &en }; check(best_pick(l, 2, 169, &c, 500, &r) == &en, "best fit: English over a Hindi-led dual audio, even played last");
+    setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 2, 169, &c, 500, &r) == &en, "top quality: the same"); unsetenv("SB_BEST_MAX"); }
+  best_set_prev("");
+
+  /* English always first: a Hindi-only Dolby Vision 4K and a Hindi-led one lose to an English HDR10 4K, in both modes */
+  Stream hinOnly; mk(&hinOnly, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/o/1/k.mkv",
+     "Interstellar.2014.2160p.WEB-DL.Hindi.DDP5.1.Atmos.DV.HDR.x265-HDH.mkv\n\xf0\x9f\x92\xbe 20.1 GB\n\xf0\x9f\x87\xae\xf0\x9f\x87\xb3", "Interstellar.2014.2160p.WEB-DL.Hindi.DDP5.1.Atmos.DV.HDR.x265-HDH.mkv");
+  { const Stream *l[] = { &hinOnly, &hin, &en }; check(best_pick(l, 3, 169, &c, 500, &r) == &en, "best fit: English HDR10 over Hindi DV");
+    setenv("SB_BEST_MAX", "1", 1); check(best_pick(l, 3, 169, &c, 500, &r) == &en, "top quality: English HDR10 over Hindi DV"); unsetenv("SB_BEST_MAX"); }
+  { const Stream *l[] = { &hinOnly, &hin }; check(best_pick(l, 2, 169, &c, 500, &r) == &hin, "no English-led release: the one that has English inside"); }
+
+  /* TrueHD: a remux with only TrueHD is last on a TV that can't play it, first in top quality on one that does */
+  { Stream rmx, web; best_set_langs("eng", "ara");
+    mk(&rmx, "[RD+] Torrentio\n4k DV | HDR10+", "https://torrentio.strem.fun/realdebrid/x/p/1/r.mkv", "Interstellar 2014 2160p PROPER IMAX REMUX DV HDR10+ TrueHD 7.1 Atmos-jennaortegaUHD\n\xf0\x9f\x91\xa4 266 \xf0\x9f\x92\xbe 95.63 GB", "");
+    mk(&web, "[TB+] Torrentio\n4k DV", "https://torrentio.strem.fun/torbox/x/q/1", "Interstellar.2014.IMAX.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-XYZ.mkv\n\xf0\x9f\x92\xbe 27 GB", "Interstellar.2014.IMAX.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-XYZ.mkv");
+    const Stream *l[] = { &rmx, &web }; static const TvCaps th = { 2160, 1, 1, 1, 0, 1 };
+    setenv("SB_BEST_MAX", "1", 1);
+    check(best_pick(l, 2, 169, &c, 500, &r) == &web, "top quality, TV without TrueHD: the WEB-DL with sound");
+    check(best_pick(l, 2, 169, &th, 500, &r) == &rmx, "top quality, TV that plays TrueHD: the remux");
+    unsetenv("SB_BEST_MAX"); }
+
+  /* top quality: the biggest file inside the best picture; a dub-led one never; the last release before size */
+  { Stream big, small, dub; best_set_langs("eng", "ara");
+    mk(&big, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/s/1/b.mkv", "Movie.2020.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.TrueHD.7.1.Atmos-FGT.mkv\n\xf0\x9f\x92\xbe 70 GB", "Movie.2020.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.TrueHD.7.1.Atmos-FGT.mkv");
+    mk(&small, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/t/1/s.mkv", "Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv\n\xf0\x9f\x92\xbe 20 GB", "Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv");
+    mk(&dub, "[RD+] Torrentio\n4k DV", "https://torrentio.strem.fun/realdebrid/x/u/1/d.mkv", "Movie.2020.ITA.ENG.2160p.UHD.BluRay.REMUX.DV.HDR.TrueHD.Atmos-XX.mkv\n\xf0\x9f\x92\xbe 90 GB", "Movie.2020.ITA.ENG.2160p.UHD.BluRay.REMUX.DV.HDR.TrueHD.Atmos-XX.mkv");
+    static const TvCaps th = { 2160, 1, 1, 1, 0, 1 }; const Stream *l[] = { &small, &dub, &big };
+    setenv("SB_BEST_MAX", "1", 1); best_set_prev("");
+    check(best_pick(l, 3, 120, &th, 500, &r) == &big, "top quality: the 70 GB DV remux over the 20 GB DV WEB-DL and the 90 GB ITA-ENG");
+    best_set_prev("Movie.2020.2160p.WEB-DL.DDP5.1.Atmos.DV.H.265-FLUX.mkv");
+    check(best_pick(l, 3, 120, &th, 500, &r) == &small, "top quality: the release played last before size");
+    best_set_prev(""); unsetenv("SB_BEST_MAX"); }
+
   /* an Italian viewer keeps the Italian release */
   best_set_langs("ita", "ita");
   { BestRate a; best_rate(&tb, &c, 500, 45, &a); check(a.subs >= 0, "an Italian viewer: the ITA release is not marked down"); }
